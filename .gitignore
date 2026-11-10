@@ -5,3 +5,7 @@
 # Python's temporary files and your own generated reports.
 __pycache__/
 **/reports/
+
+# Hide Claude file
+.claude
+**/.claude
