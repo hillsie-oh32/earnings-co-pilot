@@ -22,7 +22,7 @@ from functools import lru_cache
 import requests
 import pandas as pd
 
-from config import SEC_USER_AGENT
+from config import SEC_USER_AGENT, SEC_CONTACT_EMAIL
 
 HEADERS = {"User-Agent": SEC_USER_AGENT}
 
@@ -141,11 +141,29 @@ class CompanyNotSupported(ValueError):
     """Raised with a plain-English message when we can't analyse a ticker."""
 
 
+def sec_json(url):
+    """
+    Download data from the SEC. If the SEC refuses (it blocks automated
+    requests without a contact email), say so plainly instead of failing with
+    a confusing error.
+    """
+    response = requests.get(url, headers=HEADERS, timeout=30)
+    if response.status_code == 404:
+        return None
+    try:
+        return response.json()
+    except ValueError:
+        hint = ("No contact email is set: add SEC_CONTACT_EMAIL to your .env file "
+                "(or the app's Secrets on Streamlit Cloud)." if not SEC_CONTACT_EMAIL else
+                "It may be limiting requests from this server; try again in a few minutes.")
+        raise RuntimeError(f"The SEC refused the request (status {response.status_code}). "
+                           f"{hint}") from None
+
+
 @lru_cache(maxsize=1)
 def _company_list():
     """Every company on the SEC's ticker list, roughly largest first."""
-    url = "https://www.sec.gov/files/company_tickers.json"
-    return list(requests.get(url, headers=HEADERS, timeout=30).json().values())
+    return list(sec_json("https://www.sec.gov/files/company_tickers.json").values())
 
 
 def _name_words(text):
@@ -209,13 +227,11 @@ def get_cik(ticker):
 
 def get_company_facts(cik):
     """Download every financial figure the company has ever filed."""
-    url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
-    response = requests.get(url, headers=HEADERS, timeout=30)
-    if response.status_code == 404:
+    data = sec_json(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json")
+    if data is None:
         raise CompanyNotSupported("The SEC has no financial statements for this ticker. "
                                   "It may be an ETF or fund, which this tool doesn't cover.")
-    response.raise_for_status()
-    return response.json()["facts"]
+    return data["facts"]
 
 
 def _latest_end(facts, tags):

@@ -4,7 +4,7 @@
 
 Type a company name or ticker. The tool downloads the company's financial data and filings from the SEC, calculates the key figures and runs an accounting red-flag scan in Python, then has Claude (Anthropic's AI model) read the actual documents and write a six-part briefing pack.
 
-**[▶ Live demo](#)** · **[Example report: Apple](examples/AAPL_2026-11-10.md)** · **[Example report: HSBC](examples/HSBC_2026-11-10.md)**
+**[▶ Live demo](https://earnings-co-pilot-wetfsnutab3gtqugzjveai.streamlit.app/)** · **[Example report: Apple](examples/AAPL_2026-11-10.md)** · **[Example report: HSBC](examples/HSBC_2026-11-10.md)**
 
 ---
 

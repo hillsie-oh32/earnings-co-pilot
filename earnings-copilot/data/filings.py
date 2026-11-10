@@ -20,6 +20,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from config import SEC_USER_AGENT
+from data.sec import sec_json
 
 HEADERS = {"User-Agent": SEC_USER_AGENT}
 ARCHIVE = "https://www.sec.gov/Archives/edgar/data"
@@ -28,8 +29,7 @@ ARCHIVE = "https://www.sec.gov/Archives/edgar/data"
 @lru_cache(maxsize=32)
 def _submissions(cik):
     """The SEC's record of the company: its industry and its filing history."""
-    url = f"https://data.sec.gov/submissions/CIK{cik:010d}.json"
-    return requests.get(url, headers=HEADERS, timeout=30).json()
+    return sec_json(f"https://data.sec.gov/submissions/CIK{cik:010d}.json")
 
 
 def get_filing_list(cik):
@@ -69,7 +69,7 @@ def _download_text(url):
 def _press_release_url(cik, filing):
     """Find the press release attachment (exhibit 99.1) inside an 8-K."""
     folder = _folder(cik, filing)
-    files = requests.get(f"{folder}/index.json", headers=HEADERS, timeout=30).json()
+    files = sec_json(f"{folder}/index.json")
     names = [f["name"] for f in files["directory"]["item"]
              if f["name"].lower().endswith((".htm", ".html"))]
     exhibits = [n for n in names if re.search(r"ex-?_?99", n.lower())]
