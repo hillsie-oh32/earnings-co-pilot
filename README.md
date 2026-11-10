@@ -2,7 +2,7 @@
 
 **An AI-assisted equity research tool that turns a company's official filings into an analyst-style briefing pack in about three minutes.**
 
-**[▶ Try the live site](https://earnings-co-pilot-wetfsnutab3gtqugzjveai.streamlit.app/)** · **[Full documentation](earnings-copilot/README.md)** · **[Example report: Apple](earnings-copilot/examples/AAPL_2026-11-10.md)** · **[Example report: HSBC](earnings-copilot/examples/HSBC_2026-11-10.md)**
+**[▶ Try the live site](https://earnings-co-pilot.streamlit.app/)** · **[Full documentation](earnings-copilot/README.md)** · **[Example report: Apple](earnings-copilot/examples/AAPL_2026-11-10.md)** · **[Example report: HSBC](earnings-copilot/examples/HSBC_2026-11-10.md)**
 
 ---
 
