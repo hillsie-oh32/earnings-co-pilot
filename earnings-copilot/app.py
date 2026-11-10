@@ -30,6 +30,42 @@ BADGES = {"OK": ":green-badge[:material/check_circle: OK]",
           "RED": ":red-badge[:material/error: Red]",
           "N/A": ":gray-badge[:material/remove: N/A]"}
 
+GITHUB = "https://github.com/hillsie-oh32/earnings-co-pilot"
+
+# The website version of the README (the GitHub one has setup instructions and
+# file links that only work on GitHub).
+ABOUT = f"""
+**Earnings Copilot turns a company's official filings into an analyst-style briefing
+pack in about three minutes.**
+
+**What it does**
+1. **Downloads the figures and filings from the SEC** (the US markets regulator):
+   US, UK, European, Japanese and Chinese companies, in their own currency.
+2. **Calculates the key numbers in Python:** growth, margins, free cash flow, net debt,
+   and an **accounting red-flag scan** (receivables, cash conversion, inventory,
+   goodwill, leverage, cash runway and the Beneish M-Score for earnings manipulation).
+   Banks get their own checks: efficiency, return on equity, loan losses and funding.
+3. **Has Claude (Anthropic's AI) read the actual documents** and write a briefing pack:
+   results summary, change in management tone, red flags explained, the questions
+   analysts are likely to ask (with draft answers), a company brief, and questions to
+   ask in an interview.
+
+**How to use it:** type a company name or ticker and press **Analyse**. The numbers and
+red flags are free and instant. The **Saved reports** tab has finished AI reports to
+read. To write a new one, use your own Claude API key on the **AI report** tab.
+
+**Key design choice:** the code does all the maths from official data; the AI only reads
+and explains, and must cite its sources. Its output was checked against the original
+filings, and the tool was stress-tested on 73 companies across six regions.
+
+**Limitations:** foreign companies show annual figures (they only file structured data
+with the SEC once a year); companies listed only outside the US (e.g. Tesco) aren't
+covered; red flags are prompts to look closer, not verdicts. **Not investment advice.**
+
+Built by a second-year Accounting & Finance student with Python, pandas, Streamlit and
+the Claude API. **[View the code and full documentation on GitHub]({GITHUB})**
+"""
+
 SYMBOLS = {"USD": "$", "GBP": "£", "EUR": "€", "JPY": "¥", "CNY": "CN¥", "CHF": "CHF ",
            "DKK": "DKK ", "SEK": "SEK ", "CAD": "C$", "AUD": "A$", "HKD": "HK$"}
 
@@ -117,8 +153,12 @@ with st.form("search"):
     if right.form_submit_button("Analyse", type="primary", width="stretch"):
         choose(query)
 
+# About the project: open on the home page, folded away once a company is shown.
+with st.expander("ℹ️ About this project", expanded="query" not in st.session_state):
+    st.markdown(ABOUT)
+
 if "query" not in st.session_state:
-    st.info("Enter a company name or ticker and press **Analyse**.")
+    st.info("Enter a company name or ticker above and press **Analyse**.")
     st.stop()
 
 try:
