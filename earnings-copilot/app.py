@@ -115,6 +115,11 @@ def line_chart(df, names, title):
     """One or more percentage series on a single axis, with a legend if several."""
     data = with_labels(df).melt(id_vars="Period", value_vars=names,
                                 var_name="Measure", value_name="Percent")
+    # Short legend labels ("Gross" not "Gross margin %") so they fit on a phone;
+    # the chart title already says what they are.
+    short = [n.replace(" margin %", "").replace(" %", "") for n in names]
+    data["Measure"] = data["Measure"].map(dict(zip(names, short)))
+    names = short
     base = alt.Chart(data, title=title).encode(
         x=alt.X("Period:N", sort=None, title=None, axis=alt.Axis(labelAngle=0)),
         y=alt.Y("Percent:Q", title="%", axis=alt.Axis(grid=True, gridOpacity=0.3)),
@@ -243,9 +248,9 @@ with numbers_tab:
     st.caption(f"{'Last 12 months' if n['quarterly'] else 'Latest year'} vs the year before. "
                "A flag is a reason to look closer, not proof of a problem.")
     for flag in n["flags"]:
-        badge, check, detail = st.columns([1, 2, 5])
-        badge.markdown(BADGES[flag["status"]])
-        check.markdown(f"**{flag['check']}**")
+        # Badge and check name on one line, so they stay together on a phone.
+        check, detail = st.columns([3, 5])
+        check.markdown(f"{BADGES[flag['status']]} **{flag['check']}**")
         if flag["value"] != "-":
             check.text(flag["value"])
         with detail:
