@@ -81,13 +81,13 @@ CALCULATED NUMBERS AND RED-FLAG SCAN:
 def explain_error(error):
     """Turn an API error into a plain-English message."""
     if isinstance(error, anthropic.AuthenticationError):
-        return "Your Claude API key was rejected. Check the key in your .env file."
+        return "The Claude API key was rejected. Check it was copied in full and is still active."
     if isinstance(error, anthropic.PermissionDeniedError):
         return "Your API key doesn't have permission to use this model."
     if isinstance(error, anthropic.RateLimitError):
         return "Too many requests to Claude right now. Wait a minute and try again."
     if isinstance(error, anthropic.BadRequestError) and "credit" in str(error).lower():
-        return ("Your API credit balance is too low. Add credit at "
+        return ("The API key's credit balance is too low. Add credit at "
                 "console.anthropic.com under Billing.")
     if isinstance(error, anthropic.APIConnectionError):
         return "Couldn't reach Claude. Check your internet connection."
@@ -96,16 +96,21 @@ def explain_error(error):
     return str(error)
 
 
-def write_report(name, ticker, numbers, documents, on_text=None):
+def write_report(name, ticker, numbers, documents, on_text=None, api_key=None):
     """
     Ask Claude to write the report. `documents` is a list of
     {"title": ..., "text": ...}. Text is streamed to `on_text` as it arrives.
-    Returns the full report and the token usage.
+    `api_key` is a visitor's own key; without it, the owner's key from the
+    environment is used. Returns the full report and the token usage.
     """
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+    if api_key:
+        # A visitor's key: used for this one request only, never stored.
+        client = anthropic.Anthropic(api_key=api_key)
+    elif os.environ.get("ANTHROPIC_API_KEY"):
+        client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from the environment
+    else:
         raise RuntimeError("No Claude API key found. Copy .env.example to a file called .env "
                            "and paste your key after ANTHROPIC_API_KEY=")
-    client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from the environment
 
     content = [
         {"type": "document", "title": doc["title"],

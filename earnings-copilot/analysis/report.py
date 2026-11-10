@@ -148,22 +148,26 @@ def get_documents(n):
     return [d for d in documents if d]
 
 
-def run_ai_report(n, documents, on_text=None):
+def run_ai_report(n, documents, on_text=None, api_key=None):
     """Ask Claude for the write-up. Returns the report text and its cost in dollars."""
-    report, usage = write_report(n["name"], n["ticker"], numbers_as_text(n), documents, on_text)
+    report, usage = write_report(n["name"], n["ticker"], numbers_as_text(n), documents,
+                                 on_text, api_key)
     cost = (usage.input_tokens * INPUT_PRICE + usage.output_tokens * OUTPUT_PRICE) / 1e6
     return report, usage, cost
+
+
+def report_markdown(n, documents, report):
+    """The full report as a Markdown document: numbers, AI write-up and sources."""
+    return (f"# Earnings Copilot: {n['name']} ({n['ticker']})\n\n"
+            f"_Generated {date.today():%d %B %Y}_\n\n"
+            f"## The numbers\n\n```\n{numbers_as_text(n)}\n```\n\n{report}\n\n---\n"
+            f"_Sources: {'; '.join(d['title'] for d in documents)}. "
+            f"Figures from SEC XBRL data._\n")
 
 
 def save_report(n, documents, report):
     """Save the full report as a Markdown file and return its path."""
     REPORTS_FOLDER.mkdir(exist_ok=True)
     path = REPORTS_FOLDER / f"{n['ticker']}_{date.today().isoformat()}.md"
-    path.write_text(
-        f"# Earnings Copilot: {n['name']} ({n['ticker']})\n\n"
-        f"_Generated {date.today():%d %B %Y}_\n\n"
-        f"## The numbers\n\n```\n{numbers_as_text(n)}\n```\n\n{report}\n\n---\n"
-        f"_Sources: {'; '.join(d['title'] for d in documents)}. "
-        f"Figures from SEC XBRL data._\n",
-        encoding="utf-8")
+    path.write_text(report_markdown(n, documents, report), encoding="utf-8")
     return path

@@ -1,0 +1,7 @@
+# Never upload secrets, anywhere in the project.
+.env
+**/.env
+
+# Python's temporary files and your own generated reports.
+__pycache__/
+**/reports/

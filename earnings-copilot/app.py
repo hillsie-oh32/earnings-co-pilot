@@ -14,7 +14,7 @@ import streamlit as st
 
 from analysis.ai import explain_error
 from analysis.report import (build_numbers, get_documents, run_ai_report, save_report,
-                             REPORTS_FOLDER, EXAMPLES_FOLDER)
+                             report_markdown, REPORTS_FOLDER, EXAMPLES_FOLDER)
 from data.sec import CompanyNotSupported
 
 st.set_page_config(page_title="Earnings Copilot", page_icon="📊", layout="wide")
@@ -231,18 +231,36 @@ with ai_tab:
                    "needed (the report says so). Takes 2-4 minutes and uses your API credit "
                    "(about $0.70-1.20 per report).")
 
-    # On the public site, running a report needs a password so that visitors
-    # can't spend the owner's API credit. With no password set (e.g. when
-    # running on your own computer), the button just works.
+    # On the public site, running a report needs either the owner's password
+    # or the visitor's own Claude API key, so visitors can't spend the owner's
+    # credit. With no password set (e.g. on your own computer), the button
+    # just works with the key in .env.
     password = os.environ.get("APP_PASSWORD", "")
-    unlocked = not password
+    unlocked, own_key = not password, None
     if password:
-        st.caption("Writing new reports is password-protected because each one costs API "
-                   "credit. The **Saved reports** tab has finished examples to read for free.")
-        typed = st.text_input("Password", type="password")
-        unlocked = hmac.compare_digest(typed.encode(), password.encode())
-        if typed and not unlocked:
-            st.error("Wrong password.")
+        st.caption("Each report costs API credit, so writing one needs a password or your "
+                   "own Claude API key. The **Saved reports** tab has finished examples to "
+                   "read for free.")
+        use_own = st.radio("How do you want to run it?", ["Use my own Claude API key",
+                                                          "I have the password"],
+                           horizontal=True, label_visibility="collapsed")
+        if use_own == "I have the password":
+            typed = st.text_input("Password", type="password")
+            unlocked = hmac.compare_digest(typed.encode(), password.encode())
+            if typed and not unlocked:
+                st.error("Wrong password.")
+        else:
+            own_key = st.text_input(
+                "Your Claude API key", type="password", placeholder="sk-ant-...",
+                help="Get one at console.anthropic.com. Your key is used only to write this "
+                     "report: it isn't saved, logged or shared, and the cost goes on your "
+                     "own Anthropic account.").strip() or None
+            st.caption("Your key is used only for this report and is never saved. Reports "
+                       "written with your own key aren't added to the public Saved reports.")
+            if own_key and not own_key.startswith("sk-ant-"):
+                st.error("That doesn't look like a Claude API key (they start with sk-ant-).")
+                own_key = None
+            unlocked = own_key is not None
 
     if st.button(f"Write AI report on {n['ticker']}", type="primary", disabled=not unlocked):
         try:
@@ -261,21 +279,29 @@ with ai_tab:
                     output.markdown("".join(streamed))
 
             with st.spinner("Claude is writing the report..."):
-                report, usage, cost = run_ai_report(n, documents, on_text=show)
+                report, usage, cost = run_ai_report(n, documents, on_text=show,
+                                                    api_key=own_key)
             output.empty()
-            path = save_report(n, documents, report)
-            st.session_state.report = {"ticker": n["ticker"], "text": report, "cost": cost,
-                                       "tokens": (usage.input_tokens, usage.output_tokens),
-                                       "path": path}
+            # Reports paid for with a visitor's own key stay private to them:
+            # they can download it, but it isn't added to the shared folder.
+            if own_key:
+                saved_as = None
+            else:
+                saved_as = save_report(n, documents, report).name
+            st.session_state.report = {
+                "ticker": n["ticker"], "text": report, "cost": cost, "saved_as": saved_as,
+                "markdown": report_markdown(n, documents, report),
+                "tokens": (usage.input_tokens, usage.output_tokens)}
         except Exception as error:
             st.error(explain_error(error))
 
     saved = st.session_state.get("report")
     if saved and saved["ticker"] == n["ticker"]:
         st.success(f"Done: {saved['tokens'][0]:,} tokens in, {saved['tokens'][1]:,} out "
-                   f"(about ${saved['cost']:.2f}). Saved as {saved['path'].name}.")
-        st.download_button("Download report (.md)", saved["path"].read_bytes(),
-                           file_name=saved["path"].name, mime="text/markdown")
+                   f"(about ${saved['cost']:.2f})."
+                   + (f" Saved as {saved['saved_as']}." if saved["saved_as"] else ""))
+        st.download_button("Download report (.md)", saved["markdown"].encode("utf-8"),
+                           file_name=f"{n['ticker']}_report.md", mime="text/markdown")
         st.markdown(saved["text"])
 
 # --- Tab 3: saved reports --------------------------------------------------------

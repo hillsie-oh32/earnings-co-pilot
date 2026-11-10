@@ -16,7 +16,7 @@ Type a company name or ticker. The tool downloads the company's financial data a
 - An **accounting red-flag scan**: receivables vs revenue, cash conversion, inventory build-up, gross margin trend, cash runway, leverage, goodwill vs equity, and the **Beneish M-Score** for earnings manipulation
 - A check of the company's filing history for auditor changes, restatements and late filings
 
-**AI briefing pack (about 3 minutes, $0.60–1.20 of API credit):**
+**AI briefing pack (about 3 minutes, $0.60–1.20 of API credit).** On the live site, visitors can run it with their own Claude API key. The key is used for that one report only and never stored, and their reports stay private to them.
 1. **Results summary:** what actually moved, including one-offs that flatter the headline
 2. **Management tone:** how the language changed between the last two results announcements
 3. **Red flags explained:** the reason behind each flag, from the notes to the accounts
