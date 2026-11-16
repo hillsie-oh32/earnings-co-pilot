@@ -22,6 +22,7 @@ from analysis.dcf import (default_assumptions, run_dcf, implied_growth, sensitiv
 from analysis.report import shareholder_returns
 from data.market import get_market_data, get_quote, market_as_text, MarketDataUnavailable
 from data.peers import suggest_peers, all_companies
+from data.insiders import get_insider_trades, summarise as summarise_insiders
 from data.sec import CompanyNotSupported
 
 st.set_page_config(page_title="Earnings Copilot", page_icon="📊", layout="wide")
@@ -317,9 +318,50 @@ market, market_error = load_market(n["ticker"], not n["quarterly"])
 # The AI report gets the market data too, when it's available.
 n_ai = {**n, "market_text": market_as_text(market)} if market else n
 
-numbers_tab, market_tab, peers_tab, dcf_tab, ai_tab, saved_tab = st.tabs(
-    ["Numbers & red flags", "Market & dividends", "Peers", "Valuation (DCF)", "AI report",
-     "Saved reports"])
+numbers_tab, market_tab, peers_tab, dcf_tab, insiders_tab, ai_tab, saved_tab = st.tabs(
+    ["Numbers & red flags", "Market & dividends", "Peers", "Valuation (DCF)", "Insiders",
+     "AI report", "Saved reports"])
+
+# --- Insiders: directors' and executives' own share trades (SEC Form 4) ---------------
+with insiders_tab:
+    st.markdown("When directors, senior executives and 10% owners buy or sell the "
+                "company's shares, they must report it to the SEC on a **Form 4**. "
+                "Open-market **buys** are the stronger signal: insiders sell for many "
+                "reasons, and many sales are scheduled in advance under 10b5-1 plans.")
+    if st.button("Load insider trades (last 12 months)", type="primary"):
+        progress = st.progress(0.0, text="Reading Form 4 filings...")
+        table, failed = get_insider_trades(
+            n["cik"], n["filings"],
+            on_progress=lambda i, total: progress.progress(i / max(total, 1),
+                                                           text=f"Filing {i + 1} of {total}"))
+        progress.empty()
+        st.session_state.insiders = {"ticker": n["ticker"], "table": table, "failed": failed}
+    loaded = st.session_state.get("insiders")
+    if loaded and loaded["ticker"] == n["ticker"]:
+        table, s = loaded["table"], summarise_insiders(loaded["table"])
+        if s is None:
+            st.info("No insider transactions reported in the last 12 months. Foreign "
+                    "companies listed in the US don't have to file Form 4s.")
+        else:
+            cols = st.columns(3)
+            cols[0].metric("Open-market buys", f"${s['buy_value'] / 1e6:,.1f}m",
+                           help=f"{s['buy_count']} purchases by {s['buyers']} insiders.")
+            cols[1].metric("Open-market sales", f"${s['sell_value'] / 1e6:,.1f}m",
+                           help=f"{s['sell_count']} sales by {s['sellers']} insiders.")
+            cols[2].metric("Sales under 10b5-1 plans",
+                           f"{s['planned_share']:.0%}" if s["planned_share"] is not None
+                           else "n/a", help="Share of sales value scheduled in advance, "
+                                            "which says less about the insider's view.")
+            shown = table.drop(columns=["Code"]).copy()
+            shown["Date"] = shown["Date"].dt.strftime("%d %b %Y")
+            st.dataframe(shown.style.format({"Shares": "{:,.0f}", "Price": "${:,.2f}",
+                                             "Value": "${:,.0f}",
+                                             "Shares owned after": "{:,.0f}"}, na_rep=""),
+                         hide_index=True, width="stretch")
+            st.caption("Awards, option exercises and tax withholdings are routine pay "
+                       "matters and aren't counted as buys or sales. Source: SEC Form 4."
+                       + (f" {loaded['failed']} filings couldn't be read."
+                          if loaded["failed"] else ""))
 
 # --- Tab 1: the numbers ----------------------------------------------------------
 with numbers_tab:
