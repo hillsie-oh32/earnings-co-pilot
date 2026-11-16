@@ -55,6 +55,8 @@ STYLE = f"""<style>
     font-size: 1.05rem; color: {INK}; letter-spacing: -0.01em; }}
 .ec-logo {{ display: flex; align-items: flex-end; gap: 2px; height: 18px; }}
 .ec-logo span {{ width: 5px; background: {ACCENT}; border-radius: 1px; }}
+/* Room on the right for Streamlit's own menu button, which sits over the page. */
+.ec-links {{ margin-right: 2.6rem; }}
 .ec-links a {{ color: {MUTED}; text-decoration: none; font-size: 0.9rem; margin-left: 1.2rem; }}
 .ec-links a:hover {{ color: {ACCENT}; }}
 .ec-hero {{ padding: 2.6rem 0 1.2rem; max-width: 760px; }}
