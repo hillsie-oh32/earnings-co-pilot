@@ -16,6 +16,7 @@ Type a company name or ticker. The tool downloads the company's financial data a
 - An **accounting red-flag scan**: receivables vs revenue, cash conversion, inventory build-up, gross margin trend, cash runway, leverage, goodwill vs equity, and the **Beneish M-Score** for earnings manipulation
 - A check of the company's filing history for auditor changes, restatements and late filings
 - **Market & dividends:** share price performance against the S&P 500, valuation (P/E, forward P/E, price-to-book, EV/EBITDA), dividend yield and history, dividends and buybacks from the cash flow statement, a dividend-cover check, and **analysts' consensus** (Strong Buy to Strong Sell, with price targets) as reported by Yahoo Finance
+- **Peer comparison ("comps"):** peers suggested automatically (same SEC industry code, similar size; editable), compared on growth, margins, leverage, valuation and red flags (or bank measures for banks), with the peer median and a plain-English summary of where the company stands
 - **Results vs expectations:** for the last 8 quarters, reported earnings per share against analysts' estimates (beat or miss), the share price reaction on results day, and the next results date
 
 **AI briefing pack (about 3 minutes, $0.60–1.20 of API credit).** On the live site, visitors can run it with their own Claude API key. The key is used for that one report only and never stored, and their reports stay private to them.
@@ -109,6 +110,10 @@ config.py              Settings, read from .env
 data/sec.py            Financial figures from the SEC; name → ticker matching
 data/filings.py        Filing text: earnings releases, 10-K/10-Q, 6-K, 20-F
 data/market.py         Share prices, valuation, dividends and analyst ratings (Yahoo Finance)
+data/peers.py          Suggests peer companies (same industry, similar size)
+data/industries.json   SEC industry codes of the ~1,500 largest companies
+analysis/peers.py      The peer comparison table and summary
+build_industry_list.py Rebuilds industries.json (run occasionally)
 analysis/metrics.py    Margins, growth, cash flow, bank ratios
 analysis/red_flags.py  Accounting red flags and bank checks
 analysis/ai.py         The instructions to Claude and the API call

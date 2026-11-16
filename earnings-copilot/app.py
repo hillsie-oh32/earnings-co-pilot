@@ -15,8 +15,11 @@ import streamlit as st
 from analysis.ai import explain_error
 from analysis.report import (build_numbers, get_documents, run_ai_report, save_report,
                              report_markdown, REPORTS_FOLDER, EXAMPLES_FOLDER)
+from analysis.peers import (compare, summary as peer_summary, COLUMNS as PEER_COLUMNS,
+                            FORMATS as PEER_FORMATS)
 from analysis.report import shareholder_returns
-from data.market import get_market_data, market_as_text, MarketDataUnavailable
+from data.market import get_market_data, get_quote, market_as_text, MarketDataUnavailable
+from data.peers import suggest_peers, all_companies
 from data.sec import CompanyNotSupported
 
 st.set_page_config(page_title="Earnings Copilot", page_icon="📊", layout="wide")
@@ -48,8 +51,11 @@ pack in about three minutes.**
    goodwill, leverage, cash runway and the Beneish M-Score for earnings manipulation).
    Banks get their own checks: efficiency, return on equity, loan losses and funding.
 3. **Shows the market view:** share price against the S&P 500, valuation, dividend yield
-   and history, buybacks, and analysts' consensus ratings and price targets.
-4. **Has Claude (Anthropic's AI) read the actual documents** and write a briefing pack:
+   and history, buybacks, results vs analysts' expectations, and analysts' consensus
+   ratings and price targets.
+4. **Compares it with its peers:** similar companies side by side on growth, margins,
+   valuation and red flags, with the peer median.
+5. **Has Claude (Anthropic's AI) read the actual documents** and write a briefing pack:
    results summary, change in management tone, red flags explained, the questions
    analysts are likely to ask (with draft answers), a company brief, and questions to
    ask in an interview.
@@ -308,8 +314,8 @@ market, market_error = load_market(n["ticker"], not n["quarterly"])
 # The AI report gets the market data too, when it's available.
 n_ai = {**n, "market_text": market_as_text(market)} if market else n
 
-numbers_tab, market_tab, ai_tab, saved_tab = st.tabs(
-    ["Numbers & red flags", "Market & dividends", "AI report", "Saved reports"])
+numbers_tab, market_tab, peers_tab, ai_tab, saved_tab = st.tabs(
+    ["Numbers & red flags", "Market & dividends", "Peers", "AI report", "Saved reports"])
 
 # --- Tab 1: the numbers ----------------------------------------------------------
 with numbers_tab:
@@ -551,7 +557,85 @@ with market_tab:
     st.caption("Share price data from Yahoo Finance and may be delayed. "
                "For research and learning, not investment advice.")
 
-# --- Tab 3: AI report ------------------------------------------------------------
+# --- Tab 3: peers -------------------------------------------------------------------
+with peers_tab:
+    st.markdown("Compare with similar companies: the same measures side by side, plus the "
+                "peer median. Ratios are used throughout, so companies reporting in "
+                "different currencies can be compared.")
+    suggested = suggest_peers(n["cik"], n["sic"], not n["quarterly"])
+    options = [f"{c['ticker']} – {c['name']}" for c in all_companies()
+               if c["ticker"] != n["ticker"]]
+    chosen = st.multiselect(
+        "Peers", options, default=[f"{t} – {name}" for t, name in suggested],
+        max_selections=8, accept_new_options=True,
+        placeholder="Search for a company, or type a ticker",
+        help="Suggested automatically: companies in the same SEC industry"
+             + (f" ({n['industry']})" if n["industry"] else "")
+             + " and of similar size. Add or remove any.")
+    peer_tickers = [p.split(" – ")[0].strip().upper() for p in chosen]
+
+    key = (n["ticker"], tuple(peer_tickers))
+    if st.button("Compare", type="primary", disabled=not peer_tickers):
+        progress = st.progress(0.0, text="Loading peers...")
+        table, failed = compare(
+            n, get_quote(n["ticker"], not n["quarterly"]), peer_tickers, load=load_numbers,
+            on_progress=lambda i, t: progress.progress(i / len(peer_tickers),
+                                                       text=f"Loading {t}..."))
+        progress.empty()
+        st.session_state.peers = {"key": key, "table": table, "failed": failed}
+
+    result = st.session_state.get("peers")
+    if result and result["key"][0] == n["ticker"]:
+        table = result["table"]
+        if result["key"] != key:
+            st.caption("The peer list has changed: press **Compare** to update.")
+        kinds = dict(PEER_COLUMNS[n["is_bank"]])
+        formats = {c: PEER_FORMATS.get(kinds.get(c), "{:,.1f}")
+                   for c in table.columns if c not in ("Ticker", "Company")}
+
+        def bold_rows(row):
+            """Bold the company being analysed and the peer median."""
+            style = "font-weight: bold" if row.name in (0, len(table) - 1) else ""
+            return [style] * len(row)
+
+        st.dataframe(table.style.format(formats, na_rep="n/a").apply(bold_rows, axis=1),
+                     hide_index=True, width="stretch")
+        st.caption("Market value is shown for US-dollar listings. 'Red flags' counts the "
+                   "amber and red checks from each company's own red-flag scan. Valuations "
+                   "and share prices from Yahoo Finance; everything else from SEC filings.")
+        if result["failed"]:
+            st.caption("Couldn't load: " + "; ".join(result["failed"]))
+
+        lines = peer_summary(table, n["is_bank"])
+        if lines:
+            st.subheader(f"How {n['ticker']} compares")
+            st.markdown("\n".join(f"- {line}" for line in lines))
+            st.caption("✅ / ⚠️ mark measures where higher or lower is usually better. "
+                       "Valuation multiples have no 'better' direction: a high P/E can mean "
+                       "the market expects strong growth, or that the shares are expensive.")
+
+        metric = st.selectbox("Chart a measure", [c for c, _ in PEER_COLUMNS[n["is_bank"]]
+                                                  if table[c].notna().sum() > 1])
+        data = table[["Ticker", "Company", metric]].dropna()
+        data["Label"] = [t or "Median" for t in data["Ticker"]]
+        data["Who"] = ["This company" if i == 0 else "Peer median" if i == len(table) - 1
+                       else "Peer" for i in data.index]
+        st.altair_chart(alt.Chart(data, title=metric).mark_bar(
+            cornerRadiusEnd=4, height={"band": 0.7}).encode(
+            y=alt.Y("Label:N", sort="-x", title=None),
+            x=alt.X(f"{metric}:Q", title=None,
+                    axis=alt.Axis(format={"pct": ".0%", "pct2": ".2%"}.get(kinds[metric], ",.1f"),
+                                  grid=True, gridOpacity=0.3)),
+            color=alt.Color("Who:N", scale=alt.Scale(
+                domain=["This company", "Peer", "Peer median"],
+                range=[SERIES[1], SERIES[0], "#a3a29d"]),
+                legend=alt.Legend(orient="top", title=None)),
+            tooltip=[alt.Tooltip("Company:N"),
+                     alt.Tooltip(f"{metric}:Q", format={"pct": ".1%", "pct2": ".2%"}
+                                 .get(kinds[metric], ",.2f"))],
+        ).properties(height=40 * len(data) + 40), width="stretch")
+
+# --- Tab 4: AI report ------------------------------------------------------------
 with ai_tab:
     if n["quarterly"]:
         st.markdown("Claude reads the last two earnings releases and the latest 10-K/10-Q, "
@@ -639,7 +723,7 @@ with ai_tab:
                            file_name=f"{n['ticker']}_report.md", mime="text/markdown")
         st.markdown(saved["text"])
 
-# --- Tab 4: saved reports --------------------------------------------------------
+# --- Tab 5: saved reports --------------------------------------------------------
 with saved_tab:
     # Your own reports first, then the examples that come with the project.
     files = [p for folder in (REPORTS_FOLDER, EXAMPLES_FOLDER) if folder.exists()

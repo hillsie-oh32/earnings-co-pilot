@@ -46,8 +46,9 @@ def build_numbers(query):
     # Commercial and savings banks (industry codes 6020-6036) get the bank view
     # even if their figures are hard to find, rather than company checks that
     # don't apply to them.
-    sic, _ = get_industry(data["cik"])
+    sic, industry = get_industry(data["cik"])
     data["is_bank"] = data["is_bank"] or bool(sic and 6020 <= sic <= 6036)
+    data["sic"], data["industry"] = sic, industry
     per_year = 4 if data["quarterly"] else 1
     q = add_ratios(data["table"], per_year)
     now, ago = trailing_twelve_months(q, per_year)

@@ -10,7 +10,7 @@ Foreign companies trade in the US as ADRs (American Depositary Receipts),
 where one US share can represent several home-market shares. Some of Yahoo's
 ratios mix up the two (e.g. price-to-book for Toyota), so for foreign
 companies we only use figures that are consistent: price, market value,
-P/E ratios and dividend yield.
+the trailing P/E ratio and dividend yield.
 """
 
 import time
@@ -64,6 +64,31 @@ def _optional(fetch):
         return None
 
 
+def get_quote(ticker, foreign=False):
+    """
+    A light version of get_market_data for peer comparisons: one request,
+    just the valuation figures. Returns None if Yahoo can't be reached.
+    """
+    try:
+        info = _retry(lambda: yf.Ticker(ticker).info) or {}
+    except Exception:
+        return None
+
+    def positive(key):
+        value = info.get(key)
+        return value if isinstance(value, (int, float)) and value > 0 else None
+
+    change = info.get("52WeekChange")
+    return {"market_cap": positive("marketCap"), "currency": info.get("currency", "USD"),
+            "pe": positive("trailingPE"),
+            # Yahoo's forecasts for ADRs often mix per-ADR and home-market
+            # figures (e.g. a forward P/E of 59 against a current P/E of 14).
+            "forward_pe": None if foreign else positive("forwardPE"),
+            "ev_to_ebitda": None if foreign else positive("enterpriseToEbitda"),
+            "dividend_yield": positive("dividendYield") or 0.0,
+            "return_1y": change if isinstance(change, (int, float)) else None}
+
+
 def get_market_data(ticker, foreign=False):
     """
     Share price, valuation and dividend information for a ticker.
@@ -115,7 +140,7 @@ def get_market_data(ticker, foreign=False):
         "day_change": price / previous - 1 if previous else None,
         "market_cap": positive("marketCap"),
         "pe": positive("trailingPE"),
-        "forward_pe": positive("forwardPE"),
+        "forward_pe": None if foreign else positive("forwardPE"),  # see get_quote
         # Yahoo gives dividend yield as a percentage (e.g. 0.3 means 0.3%).
         # None means no dividend.
         "dividend_yield": positive("dividendYield"),
