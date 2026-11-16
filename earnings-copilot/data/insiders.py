@@ -76,6 +76,16 @@ def _role(owner):
     return ", ".join(roles)
 
 
+def _held(transaction):
+    """'Directly', or 'Indirectly (e.g. by trust)' as described in the filing."""
+    kind = _text(transaction, "ownershipNature/directOrIndirectOwnership/value")
+    if kind == "I":
+        nature = _text(transaction, "ownershipNature/natureOfOwnership/value")
+        useful = nature and "footnote" not in nature.lower()
+        return f"Indirectly ({nature})" if useful else "Indirectly"
+    return "Directly" if kind == "D" else ""
+
+
 def _parse(xml, filed):
     """The share transactions in one Form 4."""
     root = ET.fromstring(xml)
@@ -83,13 +93,19 @@ def _parse(xml, filed):
     name = " & ".join(_text(o, "reportingOwnerId/rptOwnerName") or "" for o in owners)
     role = _role(owners[0]) if owners else ""
     planned = _text(root, "aff10b5One") in ("true", "1")
-    trades = []
+    trades, seen = [], set()
     for t in root.findall("nonDerivativeTable/nonDerivativeTransaction"):
         code = _text(t, "transactionCoding/transactionCode")
         shares = _number(t, "transactionAmounts/transactionShares/value")
         price = _number(t, "transactionAmounts/transactionPricePerShare/value")
         if not code or not shares:
             continue
+        # Connected holders (e.g. a fund and the trust that owns it) can each
+        # report the same trade in one filing: count it once.
+        key = (_text(t, "transactionDate/value"), code, shares, price)
+        if key in seen:
+            continue
+        seen.add(key)
         trades.append({
             "Date": pd.Timestamp(_text(t, "transactionDate/value") or filed),
             "Insider": name.title(), "Role": role,
@@ -99,6 +115,9 @@ def _parse(xml, filed):
             "Planned (10b5-1)": planned if code == "S" else None,
             "Shares owned after": _number(
                 t, "postTransactionAmounts/sharesOwnedFollowingTransaction/value"),
+            # A filing can list the same trade twice if the shares are held in
+            # two ways (e.g. directly and through a trust), so say which.
+            "Held": _held(t),
         })
     return trades
 
@@ -154,9 +173,12 @@ def insiders_as_text(table, months=12):
     s = summarise(table)
     if s is None:
         return f"Insider trading (Form 4, last {months} months): no transactions reported."
+    def people(count):
+        return f"{count} insider" + ("" if count == 1 else "s")
+
     lines = [f"Insider trading (SEC Form 4, last {months} months): open-market buys "
-             f"${s['buy_value'] / 1e6:,.1f}m by {s['buyers']} insiders; sales "
-             f"${s['sell_value'] / 1e6:,.1f}m by {s['sellers']} insiders"
+             f"${s['buy_value'] / 1e6:,.1f}m by {people(s['buyers'])}; sales "
+             f"${s['sell_value'] / 1e6:,.1f}m by {people(s['sellers'])}"
              + (f" ({s['planned_share']:.0%} of sales value under pre-arranged 10b5-1 plans)"
                 if s["planned_share"] is not None else "") + "."]
     for label, row in (("Largest buy", s["biggest_buy"]), ("Largest sale", s["biggest_sell"])):

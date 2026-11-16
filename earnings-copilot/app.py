@@ -22,7 +22,7 @@ from analysis.dcf import (default_assumptions, run_dcf, implied_growth, sensitiv
 from analysis.report import shareholder_returns
 from data.market import get_market_data, get_quote, market_as_text, MarketDataUnavailable
 from data.peers import suggest_peers, all_companies
-from data.insiders import get_insider_trades, summarise as summarise_insiders
+from data.insiders import get_insider_trades, insiders_as_text, summarise as summarise_insiders
 from data.sec import CompanyNotSupported
 
 st.set_page_config(page_title="Earnings Copilot", page_icon="📊", layout="wide")
@@ -58,7 +58,8 @@ pack in about three minutes.**
    ratings and price targets.
 4. **Compares it with its peers:** similar companies side by side on growth, margins,
    valuation and red flags, with the peer median. An interactive **DCF valuation**
-   shows what growth the share price implies.
+   shows what growth the share price implies, and an **insider trading** tab shows
+   directors' and executives' own share deals.
 5. **Has Claude (Anthropic's AI) read the actual documents** and write a briefing pack:
    results summary, change in management tone, red flags explained, the questions
    analysts are likely to ask (with draft answers), a company brief, and questions to
@@ -359,9 +360,13 @@ with insiders_tab:
                                              "Shares owned after": "{:,.0f}"}, na_rep=""),
                          hide_index=True, width="stretch")
             st.caption("Awards, option exercises and tax withholdings are routine pay "
-                       "matters and aren't counted as buys or sales. Source: SEC Form 4."
+                       "matters and aren't counted as buys or sales. Where connected "
+                       "holders (e.g. a fund and its owner) report the same trade, it's "
+                       "counted once. Source: SEC Form 4."
                        + (f" {loaded['failed']} filings couldn't be read."
                           if loaded["failed"] else ""))
+        # The AI report includes the insider summary once it has been loaded.
+        n_ai = {**n_ai, "insiders_text": insiders_as_text(table)}
 
 # --- Tab 1: the numbers ----------------------------------------------------------
 with numbers_tab:

@@ -18,6 +18,7 @@ Type a company name or ticker. The tool downloads the company's financial data a
 - **Market & dividends:** share price performance against the S&P 500, valuation (P/E, forward P/E, price-to-book, EV/EBITDA), dividend yield and history, dividends and buybacks from the cash flow statement, a dividend-cover check, and **analysts' consensus** (Strong Buy to Strong Sell, with price targets) as reported by Yahoo Finance
 - **Peer comparison ("comps"):** peers suggested automatically (same SEC industry code, similar size; editable), compared on growth, margins, leverage, valuation and red flags (or bank measures for banks), with the peer median and a plain-English summary of where the company stands
 - **DCF valuation:** an interactive discounted cash flow model (growth, free cash flow margin, long-term growth and discount rate as sliders, starting from the company's own figures and a CAPM-based WACC), with a **reverse DCF** showing the growth the share price implies and a sensitivity table. US non-financial companies; clearly labelled as illustrative
+- **Insider trading:** directors' and executives' own buys and sales of the company's shares from SEC Form 4 filings, separating open-market trades from routine pay items and flagging sales pre-arranged under 10b5-1 plans
 - **Results vs expectations:** for the last 8 quarters, reported earnings per share against analysts' estimates (beat or miss), the share price reaction on results day, and the next results date
 
 **AI briefing pack (about 3 minutes, $0.60–1.20 of API credit).** On the live site, visitors can run it with their own Claude API key. The key is used for that one report only and never stored, and their reports stay private to them.
@@ -112,6 +113,7 @@ data/sec.py            Financial figures from the SEC; name → ticker matching
 data/filings.py        Filing text: earnings releases, 10-K/10-Q, 6-K, 20-F
 data/market.py         Share prices, valuation, dividends and analyst ratings (Yahoo Finance)
 data/peers.py          Suggests peer companies (same industry, similar size)
+data/insiders.py       Insider trades from SEC Form 4 filings
 data/industries.json   SEC industry codes of the ~1,500 largest companies
 analysis/peers.py      The peer comparison table and summary
 analysis/dcf.py        The DCF model, reverse DCF and sensitivity table

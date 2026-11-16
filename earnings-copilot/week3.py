@@ -13,6 +13,7 @@ from analysis.ai import explain_error
 from analysis.report import build_numbers, get_documents, run_ai_report, save_report
 from data.sec import CompanyNotSupported
 from data.market import get_market_data, market_as_text, MarketDataUnavailable
+from data.insiders import get_insider_trades, insiders_as_text
 
 ticker = sys.argv[1] if len(sys.argv) > 1 else "AAPL"
 
@@ -30,6 +31,11 @@ try:
     numbers["market_text"] = market_as_text(market)
 except MarketDataUnavailable as error:
     print(f"  (skipped: {error})")
+
+if numbers["quarterly"]:  # only US companies file insider trades (Form 4)
+    print("Reading insider trades...")
+    trades, _ = get_insider_trades(numbers["cik"], numbers["filings"])
+    numbers["insiders_text"] = insiders_as_text(trades)
 
 print("Downloading filings...")
 documents = get_documents(numbers)

@@ -134,6 +134,7 @@ def numbers_as_text(n):
         "Red-flag scan:\n" + "\n".join(flag_lines),
         *([f"Market data (Yahoo Finance, {date.today():%d %b %Y}):\n{n['market_text']}"]
           if n.get("market_text") else []),
+        *([n["insiders_text"]] if n.get("insiders_text") else []),
     ])
 
 
