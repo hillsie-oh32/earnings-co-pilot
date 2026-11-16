@@ -123,6 +123,28 @@ def analyst_chart(counts):
     ).properties(height=200)
 
 
+def eps_chart(scorecard):
+    """Reported earnings per share against analysts' estimates, each quarter."""
+    rows = []
+    for r in scorecard:
+        label = r["date"].strftime("%b %Y")
+        rows += [{"Quarter": label, "Type": "Analysts' estimate", "EPS": r["estimate"]},
+                 {"Quarter": label, "Type": "Reported", "EPS": r["actual"]}]
+    names = ["Analysts' estimate", "Reported"]
+    return alt.Chart(pd.DataFrame(rows), title="Earnings per share: reported vs estimate").mark_bar(
+        cornerRadiusEnd=4,
+    ).encode(
+        x=alt.X("Quarter:N", sort=None, title=None, axis=alt.Axis(labelAngle=0)),
+        xOffset=alt.XOffset("Type:N", sort=names),
+        y=alt.Y("EPS:Q", title=None, axis=alt.Axis(grid=True, gridOpacity=0.3)),
+        # Estimate in a neutral grey, the reported figure in the main colour.
+        color=alt.Color("Type:N", scale=alt.Scale(domain=names, range=["#a3a29d", SERIES[0]]),
+                        legend=alt.Legend(orient="top", title=None)),
+        tooltip=[alt.Tooltip("Quarter:N"), alt.Tooltip("Type:N"),
+                 alt.Tooltip("EPS:Q", format=".2f")],
+    ).properties(height=260)
+
+
 def year_label(year):
     """'2026 so far' for the current year, whose figures are incomplete."""
     return f"{year} so far" if year == pd.Timestamp.now().year else str(year)
@@ -418,6 +440,47 @@ with market_tab:
                                       label_visibility="collapsed") or "1 year"
         st.altair_chart(performance_chart(market, 1 if period == "1 year" else 5, n["ticker"]),
                         width="stretch")
+
+        st.subheader("Results vs expectations")
+        card = market["scorecard"]
+        nxt = market["next_results"]
+        next_text = f"{nxt:%d %b %Y}" if nxt is not None else "Not announced"
+        if not card:
+            st.metric("Next results", next_text)
+            if market["foreign"]:
+                st.caption("Earnings-vs-estimate history isn't shown for foreign companies: "
+                           "Yahoo's figures for US-listed ADRs often compare per-ADR and "
+                           "home-market amounts, which gives misleading 'surprises'.")
+        else:
+            beats = sum(r["outcome"] == "Beat" for r in card)
+            moves = [r["reaction"] for r in card if r["reaction"] is not None]
+            cols = st.columns(3)
+            cols[0].metric(f"Beat estimates", f"{beats} of last {len(card)}",
+                           help="Quarters where reported earnings per share (EPS) were above "
+                                "the analysts' average estimate.")
+            cols[1].metric("Average move on results day",
+                           f"{sum(abs(x) for x in moves) / len(moves):.1%}" if moves else "n/a",
+                           help="The average size of the share price move (up or down) on "
+                                "the first trading day after results. A guide to how much "
+                                "results tend to move the shares.")
+            cols[2].metric("Next results", next_text,
+                           help=(f"Analysts' average EPS estimate: {market['next_estimate']:.2f}"
+                                 if market["next_estimate"] is not None else None))
+            left, right = st.columns(2)
+            left.altair_chart(eps_chart(card), width="stretch")
+            table = pd.DataFrame([{
+                "Results": f"{r['date']:%d %b %Y}",
+                "Result": {"Beat": "✅ Beat", "Miss": "❌ Miss"}.get(r["outcome"], "➖ In line"),
+                "Surprise": f"{r['surprise']:+.1%}" if r["surprise"] is not None
+                            else f"{r['actual'] - r['estimate']:+.2f}",
+                "Price move": f"{r['reaction']:+.1%}" if r["reaction"] is not None else "n/a",
+            } for r in reversed(card)])
+            right.dataframe(table, hide_index=True, width="stretch")
+            st.caption("EPS figures are those Yahoo Finance uses, usually the company's "
+                       "adjusted EPS, so they can differ from the statutory figure. "
+                       "'Price move' is the first trading day after the results. "
+                       "A beat doesn't guarantee a rise: the share price reacts to how "
+                       "results compare with the market's real hopes, and to guidance.")
 
         st.subheader("What analysts say")
         a = market["analysts"]

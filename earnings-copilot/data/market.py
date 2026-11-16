@@ -13,6 +13,8 @@ companies we only use figures that are consistent: price, market value,
 P/E ratios and dividend yield.
 """
 
+import time
+
 import pandas as pd
 import yfinance as yf
 
@@ -23,12 +25,43 @@ class MarketDataUnavailable(RuntimeError):
     """Raised when Yahoo Finance can't be reached or has no data."""
 
 
-def _price_history(ticker, period="5y"):
-    history = yf.Ticker(ticker).history(period=period, auto_adjust=False)
+def _retry(fetch, attempts=2, pause=2.0):
+    """Try a Yahoo request again once after a short pause if it's refused."""
+    for attempt in range(attempts):
+        try:
+            return fetch()
+        except Exception:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(pause)
+
+
+def _price_history(ticker, period="10y"):
+    """Daily prices, with dividends paid, for up to 10 years."""
+    history = _retry(lambda: yf.Ticker(ticker).history(period=period, auto_adjust=False))
     if history.empty:
         raise MarketDataUnavailable(f"No share price history found for {ticker}.")
     history.index = history.index.tz_localize(None).normalize()
     return history
+
+
+_benchmark = {"fetched": 0.0, "prices": None}
+
+
+def _benchmark_prices():
+    """S&P 500 prices, downloaded at most once an hour and shared by all companies."""
+    if _benchmark["prices"] is None or time.time() - _benchmark["fetched"] > 3600:
+        _benchmark["prices"] = _price_history(BENCHMARK, "5y")["Close"]
+        _benchmark["fetched"] = time.time()
+    return _benchmark["prices"]
+
+
+def _optional(fetch):
+    """Extra data (analyst ratings, earnings dates): None if it can't be fetched."""
+    try:
+        return _retry(fetch)
+    except Exception:
+        return None
 
 
 def get_market_data(ticker, foreign=False):
@@ -38,22 +71,24 @@ def get_market_data(ticker, foreign=False):
     """
     try:
         stock = yf.Ticker(ticker)
-        info = stock.info or {}
+        info = _retry(lambda: stock.info) or {}
         history = _price_history(ticker)
-        benchmark = _price_history(BENCHMARK)["Close"]
-        dividends = stock.dividends
-        try:
-            ratings = stock.recommendations
-        except Exception:
-            ratings = None  # analyst data is optional
+        benchmark = _benchmark_prices()
     except MarketDataUnavailable:
         raise
     except Exception as error:
         raise MarketDataUnavailable(
             "Market data is unavailable right now (Yahoo Finance may be limiting requests). "
             f"Details: {error}") from None
+    ratings = _optional(lambda: stock.recommendations)
+    earnings_dates = _optional(lambda: stock.get_earnings_dates(limit=16))
+    # The price history includes each dividend paid, so no separate request.
+    dividends = history["Dividends"][history["Dividends"] > 0] \
+        if "Dividends" in history else None
 
     close = history["Close"]
+    # Charts show up to 5 years; the extra history is only for dividends.
+    close = close[close.index >= close.index[-1] - pd.DateOffset(years=5)]
     price = info.get("currentPrice") or float(close.iloc[-1])
     previous = info.get("previousClose") or float(close.iloc[-2])
 
@@ -64,7 +99,6 @@ def get_market_data(ticker, foreign=False):
 
     # Dividends per share, added up by calendar year.
     if dividends is not None and not dividends.empty:
-        dividends.index = dividends.index.tz_localize(None)
         by_year = dividends.groupby(dividends.index.year).sum().tail(10)
         last_dividend = dividends.index[-1]
     else:
@@ -101,8 +135,66 @@ def get_market_data(ticker, foreign=False):
             _pays_dividend(info) and last_dividend is not None
             and (pd.Timestamp.now() - last_dividend).days > 450),
         "analysts": _analyst_view(info, ratings, price),
+        **_earnings_scorecard(earnings_dates, close, foreign),
         "foreign": foreign,
     }
+
+
+def _earnings_scorecard(earnings_dates, close, foreign):
+    """
+    For each recent results announcement: what analysts expected for earnings
+    per share (EPS), what the company reported, whether it beat or missed,
+    and how the share price reacted. Plus the next results date.
+
+    Only for US companies: for ADRs, Yahoo often compares figures on
+    different bases (per ADR vs per home-market share), producing
+    nonsensical "surprises".
+    """
+    empty = {"scorecard": [], "next_results": None, "next_estimate": None}
+    if earnings_dates is None or earnings_dates.empty:
+        return empty
+    df = earnings_dates.copy()
+    df.index = df.index.tz_convert("America/New_York").tz_localize(None)
+    df = df[~df.index.normalize().duplicated(keep="last")].sort_index()
+
+    now = pd.Timestamp.now()
+    future = df[(df.index > now) & df["Reported EPS"].isna()]
+    result = {
+        "next_results": future.index[0] if len(future) else None,
+        "next_estimate": (None if foreign or not len(future)
+                          else _number(future["EPS Estimate"].iloc[0])),
+        "scorecard": [],
+    }
+    if foreign:
+        return result
+
+    reported = df[df["Reported EPS"].notna() & df["EPS Estimate"].notna()]
+    reported = reported[reported.index > now - pd.DateOffset(years=2, months=3)].tail(8)
+    days = close.index
+    for when, row in reported.iterrows():
+        estimate, actual = float(row["EPS Estimate"]), float(row["Reported EPS"])
+        difference = actual - estimate
+        # A surprise in % only means something if the estimate is a profit.
+        surprise = difference / estimate if estimate > 0.01 else None
+        outcome = ("In line" if abs(difference) < 0.005 or
+                   (surprise is not None and abs(surprise) < 0.005)
+                   else "Beat" if difference > 0 else "Miss")
+
+        # Share price reaction: results released before midday move that
+        # day's price; results after the close move the next trading day's.
+        react_day = when.normalize() if when.hour < 12 else when.normalize() + pd.Timedelta(days=1)
+        after = days[days >= react_day]
+        before = days[days < react_day]
+        reaction = (float(close[after[0]] / close[before[-1]] - 1)
+                    if len(after) and len(before) else None)
+        result["scorecard"].append({"date": when, "estimate": estimate, "actual": actual,
+                                    "surprise": surprise, "outcome": outcome,
+                                    "reaction": reaction})
+    return result
+
+
+def _number(x):
+    return None if pd.isna(x) else float(x)
 
 
 RATINGS = ["Strong Buy", "Buy", "Hold", "Sell", "Strong Sell"]
@@ -171,6 +263,18 @@ def market_as_text(m):
         lines.append(f"Price-to-book: {m['price_to_book']:.1f}")
     if m["ev_to_ebitda"] is not None:
         lines.append(f"EV/EBITDA: {m['ev_to_ebitda']:.1f}")
+    if m["scorecard"]:
+        beats = sum(r["outcome"] == "Beat" for r in m["scorecard"])
+        last = m["scorecard"][-1]
+        lines.append(
+            f"Earnings vs analysts' estimates: beat in {beats} of the last "
+            f"{len(m['scorecard'])} quarters. Latest ({last['date']:%d %b %Y}): EPS "
+            f"{last['actual']:.2f} vs estimate {last['estimate']:.2f} ({last['outcome']}); "
+            f"share price reaction {pct(last['reaction'])}")
+    if m["next_results"] is not None:
+        lines.append(f"Next results expected: {m['next_results']:%d %b %Y}"
+                     + (f" (EPS estimate {m['next_estimate']:.2f})"
+                        if m["next_estimate"] is not None else ""))
     a = m["analysts"]
     if a:
         breakdown = ", ".join(f"{n} {name}" for name, n in a["counts"].items() if n)
