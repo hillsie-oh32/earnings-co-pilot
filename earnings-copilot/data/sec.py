@@ -47,6 +47,9 @@ FLOW_TAGS = {
                          "DepreciationAmortizationAndAccretionNet", "Depreciation"],
         "Operating cash flow": ["NetCashProvidedByUsedInOperatingActivities"],
         "Capex": ["PaymentsToAcquirePropertyPlantAndEquipment"],
+        # Returns to shareholders (cash paid out, from the cash flow statement)
+        "Dividends paid": ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"],
+        "Share buybacks": ["PaymentsForRepurchaseOfCommonStock"],
         # Banks
         "Net interest income": ["InterestIncomeExpenseNet"],
         "Fee & other income": ["NoninterestIncome"],
@@ -72,6 +75,10 @@ FLOW_TAGS = {
         "Capex": ["PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities",
                   "PurchaseOfPropertyPlantAndEquipment",
                   "PurchaseOfPropertyPlantAndEquipmentIntangibleAssetsOtherThanGoodwillInvestmentPropertyAndOtherNoncurrentAssets"],
+        # Returns to shareholders
+        "Dividends paid": ["DividendsPaidClassifiedAsFinancingActivities", "DividendsPaid",
+                           "DividendsPaidToEquityHoldersOfParentClassifiedAsFinancingActivities"],
+        "Share buybacks": ["PaymentsToAcquireOrRedeemEntitysShares"],
         # Banks
         "Net interest income": ["InterestRevenueExpense"],
         "Fee & other income": ["FeeAndCommissionIncomeExpense"],

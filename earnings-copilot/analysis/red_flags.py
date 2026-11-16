@@ -97,6 +97,22 @@ def cash_runway(now, ago):
                  f"Cash of ${cash / 1e6:,.0f}m vs burn of ${-burn / 1e6:,.0f}m per quarter", why)
 
 
+def dividend_cover(now, ago):
+    why = ("Dividends should be paid from cash the business generates. If free cash flow "
+           "doesn't cover them, they're being funded by debt or savings, which can't last.")
+    name = "Dividend cover"
+    dividends = now["Dividends paid"]
+    if _missing(dividends) or dividends <= 0:
+        return _flag(name, NA, "-", "No dividend paid", why)
+    fcf = now["Operating cash flow"] - now["Capex"]
+    if _missing(fcf):
+        return _flag(name, NA, "-", "Free cash flow not reported", why)
+    cover = fcf / dividends
+    status = RED if cover < 1 else AMBER if cover < 1.3 else OK
+    return _flag(name, status, f"{cover:.1f}x",
+                 f"Free cash flow covers the dividend {cover:.1f} times", why)
+
+
 def leverage(now, ago):
     why = ("Net debt / EBITDA shows how many years of earnings it would take to repay "
            "debt. Above about 3x, a downturn could make the debt hard to service.")
@@ -272,7 +288,7 @@ def bank_equity_cushion(now, ago):
 
 
 CHECKS = [receivables_vs_revenue, cash_conversion, inventory_build, gross_margin_trend,
-          cash_runway, leverage, goodwill_vs_equity, beneish_m_score]
+          cash_runway, dividend_cover, leverage, goodwill_vs_equity, beneish_m_score]
 
 BANK_CHECKS = [bank_efficiency, bank_return_on_equity, bank_cost_of_risk,
                bank_loans_to_deposits, bank_deposit_trend, bank_equity_cushion]

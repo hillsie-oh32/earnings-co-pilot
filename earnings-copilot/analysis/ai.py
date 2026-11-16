@@ -31,6 +31,11 @@ briefly explain the difference.
 (e.g. CET1) and how they compare with requirements, credit quality (impairments, \
 non-performing loans), funding and liquidity, and returns. Take capital ratios \
 from the documents.
+- If market data is provided (share price, valuation, dividends), you may describe \
+how the market values the company and how it returns cash to shareholders, e.g. \
+in the results summary and interview questions. You may mention the analyst \
+consensus, attributed as analysts' views reported by Yahoo Finance. Describe; never \
+make your own buy/sell recommendation or price target.
 - If a document is marked as truncated, mention once that later parts of it were \
 not reviewed, and don't guess at what they contain.
 - The calculated numbers were produced by code from the company's official SEC data. \

@@ -15,6 +15,7 @@ Type a company name or ticker. The tool downloads the company's financial data a
 - Charts of revenue, margins and free cash flow
 - An **accounting red-flag scan**: receivables vs revenue, cash conversion, inventory build-up, gross margin trend, cash runway, leverage, goodwill vs equity, and the **Beneish M-Score** for earnings manipulation
 - A check of the company's filing history for auditor changes, restatements and late filings
+- **Market & dividends:** share price performance against the S&P 500, valuation (P/E, forward P/E, price-to-book, EV/EBITDA), dividend yield and history, dividends and buybacks from the cash flow statement, a dividend-cover check, and **analysts' consensus** (Strong Buy to Strong Sell, with price targets) as reported by Yahoo Finance
 
 **AI briefing pack (about 3 minutes, $0.60–1.20 of API credit).** On the live site, visitors can run it with their own Claude API key. The key is used for that one report only and never stored, and their reports stay private to them.
 1. **Results summary:** what actually moved, including one-offs that flatter the headline
@@ -80,6 +81,7 @@ Figures are shown in each company's own currency. Company names work as well as 
 - **Companies listed only outside the US** (e.g. Tesco, Tokyo-only shares) aren't in the SEC's data. Covering them would need other sources (Companies House, EDINET).
 - **Some banks' figures are incomplete** in the SEC data (e.g. Deutsche Bank, Santander), so some bank checks show "n/a". Regulatory capital ratios come from the AI reading the filings, not from the structured data.
 - **Red flags are prompts to look closer, not verdicts.** The Beneish M-Score, for example, flags fast-growing companies like Nvidia (score −0.40) even without manipulation, because the model was built on slower-growing firms.
+- **Share price data comes from Yahoo Finance,** an unofficial source that can be delayed or briefly unavailable; the rest of the tool works without it. For foreign companies it shows the US-listed share (ADR), so ratios that mix ADR and home-market figures are left out. Analyst ratings are third-party views, and coverage of foreign companies on Yahoo is thin.
 - **Not investment advice.** This is a research and learning tool.
 
 ## Running it yourself
@@ -105,6 +107,7 @@ app.py                 The website (Streamlit)
 config.py              Settings, read from .env
 data/sec.py            Financial figures from the SEC; name → ticker matching
 data/filings.py        Filing text: earnings releases, 10-K/10-Q, 6-K, 20-F
+data/market.py         Share prices, valuation, dividends and analyst ratings (Yahoo Finance)
 analysis/metrics.py    Margins, growth, cash flow, bank ratios
 analysis/red_flags.py  Accounting red flags and bank checks
 analysis/ai.py         The instructions to Claude and the API call

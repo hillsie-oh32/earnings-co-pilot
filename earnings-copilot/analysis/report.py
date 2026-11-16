@@ -113,6 +113,9 @@ def numbers_as_text(n):
         lines.append(f"{item}: {before / 1e6:,.0f} -> {after / 1e6:,.0f} ({change})")
     if not n["is_bank"]:
         lines.append(f"Net debt (negative = net cash): {n['now']['Net debt'] / 1e6:,.0f}")
+    returns = shareholder_returns(n["now"])
+    lines.append(f"Dividends paid: {returns['dividends_text']}; share buybacks: "
+                 f"{returns['buybacks_text']}; dividend payout ratio: {returns['payout_text']}")
 
     flag_lines = [f"[{f['status']}] {f['check']}: {f['detail']}" for f in n["flags"]]
     flag_lines.append("Filing history (last 3 years): " +
@@ -128,7 +131,36 @@ def numbers_as_text(n):
         f"Last {len(snapshot)} {n['period']}s:\n" + snapshot.round(1).to_string(),
         f"{period} vs the year before ({n['currency']}m):\n" + "\n".join(lines),
         "Red-flag scan:\n" + "\n".join(flag_lines),
+        *([f"Market data (Yahoo Finance, {date.today():%d %b %Y}):\n{n['market_text']}"]
+          if n.get("market_text") else []),
     ])
+
+
+def shareholder_returns(now):
+    """
+    Cash returned to shareholders over the last 12 months (or latest year),
+    from the cash flow statement, and the share of profit paid as dividends.
+    """
+    dividends, buybacks, profit = (now["Dividends paid"], now["Share buybacks"],
+                                   now["Net income"])
+
+    def amount(x):
+        return "none reported" if pd.isna(x) or x <= 0 else f"{x / 1e6:,.0f}m"
+
+    if pd.isna(dividends) or dividends <= 0:
+        payout, payout_text = None, "no dividend"
+    elif pd.isna(profit) or profit <= 0:
+        payout, payout_text = None, "not meaningful (loss-making)"
+    else:
+        payout = dividends / profit
+        # A tiny profit makes the ratio huge and meaningless (e.g. BP in 2025).
+        payout_text = (f"{payout:.0%} of profit" if payout <= 5 else
+                       "not meaningful (profit close to zero)")
+        if payout > 5:
+            payout = None
+    return {"dividends": dividends, "buybacks": buybacks, "payout": payout,
+            "dividends_text": amount(dividends), "buybacks_text": amount(buybacks),
+            "payout_text": payout_text}
 
 
 def get_documents(n):

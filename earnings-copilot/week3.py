@@ -12,6 +12,7 @@ import sys
 from analysis.ai import explain_error
 from analysis.report import build_numbers, get_documents, run_ai_report, save_report
 from data.sec import CompanyNotSupported
+from data.market import get_market_data, market_as_text, MarketDataUnavailable
 
 ticker = sys.argv[1] if len(sys.argv) > 1 else "AAPL"
 
@@ -22,6 +23,13 @@ except CompanyNotSupported as error:
     sys.exit(str(error))
 for warning in numbers["warnings"]:
     print(f"WARNING: {warning}")
+
+print("Fetching market data...")
+try:
+    market = get_market_data(numbers["ticker"], foreign=not numbers["quarterly"])
+    numbers["market_text"] = market_as_text(market)
+except MarketDataUnavailable as error:
+    print(f"  (skipped: {error})")
 
 print("Downloading filings...")
 documents = get_documents(numbers)

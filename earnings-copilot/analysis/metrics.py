@@ -10,6 +10,7 @@ import pandas as pd
 # Figures that build up over a period, so can be added across quarters.
 FLOWS = ["Revenue", "Cost of revenue", "Gross profit", "SG&A", "Operating income",
          "Net income", "Depreciation", "Operating cash flow", "Capex",
+         "Dividends paid", "Share buybacks",
          "Net interest income", "Fee & other income", "Operating costs",
          "Credit loss provisions"]
 

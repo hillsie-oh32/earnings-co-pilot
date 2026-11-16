@@ -15,6 +15,8 @@ import streamlit as st
 from analysis.ai import explain_error
 from analysis.report import (build_numbers, get_documents, run_ai_report, save_report,
                              report_markdown, REPORTS_FOLDER, EXAMPLES_FOLDER)
+from analysis.report import shareholder_returns
+from data.market import get_market_data, market_as_text, MarketDataUnavailable
 from data.sec import CompanyNotSupported
 
 st.set_page_config(page_title="Earnings Copilot", page_icon="📊", layout="wide")
@@ -45,7 +47,9 @@ pack in about three minutes.**
    and an **accounting red-flag scan** (receivables, cash conversion, inventory,
    goodwill, leverage, cash runway and the Beneish M-Score for earnings manipulation).
    Banks get their own checks: efficiency, return on equity, loan losses and funding.
-3. **Has Claude (Anthropic's AI) read the actual documents** and write a briefing pack:
+3. **Shows the market view:** share price against the S&P 500, valuation, dividend yield
+   and history, buybacks, and analysts' consensus ratings and price targets.
+4. **Has Claude (Anthropic's AI) read the actual documents** and write a briefing pack:
    results summary, change in management tone, red flags explained, the questions
    analysts are likely to ask (with draft answers), a company brief, and questions to
    ask in an interview.
@@ -60,7 +64,8 @@ filings, and the tool was stress-tested on 73 companies across six regions.
 
 **Limitations:** foreign companies show annual figures (they only file structured data
 with the SEC once a year); companies listed only outside the US (e.g. Tesco) aren't
-covered; red flags are prompts to look closer, not verdicts. **Not investment advice.**
+covered; red flags are prompts to look closer, not verdicts; share prices and analyst
+ratings come from Yahoo Finance and may be delayed. **Not investment advice.**
 
 Built by a second-year Accounting & Finance student with Python, pandas, Streamlit and
 the Claude API. **[View the code and full documentation on GitHub]({GITHUB})**
@@ -68,6 +73,93 @@ the Claude API. **[View the code and full documentation on GitHub]({GITHUB})**
 
 SYMBOLS = {"USD": "$", "GBP": "£", "EUR": "€", "JPY": "¥", "CNY": "CN¥", "CHF": "CHF ",
            "DKK": "DKK ", "SEK": "SEK ", "CAD": "C$", "AUD": "A$", "HKD": "HK$"}
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def load_market(ticker, foreign):
+    """Share price and market data, cached for 15 minutes. Returns (data, error)."""
+    try:
+        return get_market_data(ticker, foreign), None
+    except MarketDataUnavailable as error:
+        return None, str(error)
+
+
+def performance_chart(market, years, name):
+    """The share price against the S&P 500, both rebased to 100 at the start."""
+    prices = pd.DataFrame({name: market["prices"], "S&P 500": market["benchmark"]}).dropna()
+    prices = prices[prices.index >= prices.index[-1] - pd.DateOffset(years=years)]
+    rebased = (prices / prices.iloc[0] * 100).reset_index(names="Date")
+    data = rebased.melt(id_vars="Date", var_name="Series", value_name="Value")
+    base = alt.Chart(data, title=f"Share price vs the S&P 500 (start = 100)").encode(
+        x=alt.X("Date:T", title=None),
+        y=alt.Y("Value:Q", title=None, scale=alt.Scale(zero=False),
+                axis=alt.Axis(grid=True, gridOpacity=0.3)),
+        color=alt.Color("Series:N", scale=alt.Scale(domain=[name, "S&P 500"],
+                                                    range=SERIES[:2]),
+                        legend=alt.Legend(orient="top", title=None)),
+        tooltip=[alt.Tooltip("Date:T", format="%d %b %Y"), alt.Tooltip("Series:N"),
+                 alt.Tooltip("Value:Q", format=".1f")],
+    )
+    return base.mark_line(strokeWidth=2).properties(height=300)
+
+
+# Analyst ratings run from positive to negative, so they use a diverging scale:
+# blues for buy, a neutral grey for hold, reds for sell.
+RATING_COLOURS = ["#1c5cab", "#6da7ec", "#a3a29d", "#ef9a99", "#d03b3b"]
+
+
+def analyst_chart(counts):
+    """How many analysts give each rating this month."""
+    data = pd.DataFrame({"Rating": list(counts), "Analysts": list(counts.values())})
+    return alt.Chart(data, title="Analyst ratings this month").mark_bar(
+        cornerRadiusEnd=4, height={"band": 0.7},
+    ).encode(
+        y=alt.Y("Rating:N", sort=list(counts), title=None),
+        x=alt.X("Analysts:Q", title=None, axis=alt.Axis(tickMinStep=1, grid=True,
+                                                         gridOpacity=0.3)),
+        color=alt.Color("Rating:N", scale=alt.Scale(domain=list(counts),
+                                                    range=RATING_COLOURS), legend=None),
+        tooltip=[alt.Tooltip("Rating:N"), alt.Tooltip("Analysts:Q")],
+    ).properties(height=200)
+
+
+def year_label(year):
+    """'2026 so far' for the current year, whose figures are incomplete."""
+    return f"{year} so far" if year == pd.Timestamp.now().year else str(year)
+
+
+def year_bars(by_year, title, value_title):
+    """Bars for a series indexed by year."""
+    data = by_year.rename_axis("Year").reset_index(name=value_title)
+    data["Year"] = data["Year"].map(year_label)
+    return alt.Chart(data, title=title).mark_bar(
+        color=SERIES[0], cornerRadiusEnd=4, width={"band": 0.6},
+    ).encode(
+        x=alt.X("Year:N", title=None, axis=alt.Axis(labelAngle=0)),
+        y=alt.Y(f"{value_title}:Q", title=None, axis=alt.Axis(grid=True, gridOpacity=0.3)),
+        tooltip=[alt.Tooltip("Year:N"), alt.Tooltip(f"{value_title}:Q", format=",.2f")],
+    ).properties(height=260)
+
+
+def returns_chart(q, currency, quarterly):
+    """Dividends and buybacks paid each year (millions), side by side."""
+    yearly = q[["Dividends paid", "Share buybacks"]].groupby(q.index.year).sum(min_count=1)
+    yearly = (yearly.tail(6) / 1e6).rename_axis("Year").reset_index()
+    # Quarterly figures for the current year cover only part of it.
+    yearly["Year"] = yearly["Year"].map(year_label if quarterly else str)
+    data = yearly.melt(id_vars="Year", var_name="Type", value_name="Amount").dropna()
+    names = ["Dividends paid", "Share buybacks"]
+    return alt.Chart(data, title=f"Cash returned to shareholders ({currency} m)").mark_bar(
+        cornerRadiusEnd=4,
+    ).encode(
+        x=alt.X("Year:N", title=None, axis=alt.Axis(labelAngle=0)),
+        xOffset=alt.XOffset("Type:N", sort=names),
+        y=alt.Y("Amount:Q", title=None, axis=alt.Axis(grid=True, gridOpacity=0.3)),
+        color=alt.Color("Type:N", scale=alt.Scale(domain=names, range=SERIES[:2]),
+                        legend=alt.Legend(orient="top", title=None)),
+        tooltip=[alt.Tooltip("Year:N"), alt.Tooltip("Type:N"),
+                 alt.Tooltip("Amount:Q", format=",.0f")],
+    ).properties(height=260)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -190,7 +282,12 @@ for note in n["notes"]:
 for warning in n["warnings"]:
     st.warning(warning, icon=":material/warning:")
 
-numbers_tab, ai_tab, saved_tab = st.tabs(["Numbers & red flags", "AI report", "Saved reports"])
+market, market_error = load_market(n["ticker"], not n["quarterly"])
+# The AI report gets the market data too, when it's available.
+n_ai = {**n, "market_text": market_as_text(market)} if market else n
+
+numbers_tab, market_tab, ai_tab, saved_tab = st.tabs(
+    ["Numbers & red flags", "Market & dividends", "AI report", "Saved reports"])
 
 # --- Tab 1: the numbers ----------------------------------------------------------
 with numbers_tab:
@@ -261,7 +358,132 @@ with numbers_tab:
                 ("; ".join(n["history"]) if n["history"]
                  else "no auditor changes, restatements or late filings ✅"))
 
-# --- Tab 2: AI report ------------------------------------------------------------
+# --- Tab 2: market & dividends -----------------------------------------------------
+with market_tab:
+    if market is None:
+        st.warning(f"Share price data isn't available right now. {market_error}",
+                   icon=":material/warning:")
+    else:
+        mcur = market["currency"]
+        st.subheader("Share price and valuation")
+        if market["foreign"]:
+            st.caption("This is the US-listed share (ADR), priced in US dollars. One ADR can "
+                       "represent several home-market shares, so per-share figures differ "
+                       "from the home market, and ratios that mix the two are left out.")
+
+        def ratio(x, suffix="x"):
+            return f"{x:.1f}{suffix}" if x else "n/a"
+
+        cols = st.columns(4)
+        cols[0].metric("Share price", f"{SYMBOLS.get(mcur, mcur + ' ')}{market['price']:,.2f}",
+                       delta=(f"{market['day_change']:+.2%} today"
+                              if market["day_change"] is not None else None))
+        cols[1].metric("Market value", money(market["market_cap"], mcur))
+        cols[2].metric("P/E (last 12 months)", ratio(market["pe"]),
+                       help="Share price ÷ earnings per share over the last 12 months.")
+        cols[3].metric("Forward P/E", ratio(market["forward_pe"]),
+                       help="Share price ÷ analysts' forecast earnings for the next 12 months.")
+
+        cols = st.columns(4)
+        ret, mret = market["return_1y"], market["market_return_1y"]
+        cols[0].metric("1-year price change",
+                       f"{ret:+.1%}" if ret is not None else "n/a",
+                       delta=(f"{(ret - mret) * 100:+.1f} pts vs S&P 500"
+                              if ret is not None and mret is not None else None))
+        cols[1].metric("Dividend yield",
+                       f"{market['dividend_yield']:.2f}%" if market["dividend_yield"] else "None",
+                       help="Dividends paid over a year ÷ share price.")
+        low, high = market["low_52w"], market["high_52w"]
+        cols[2].metric("vs 52-week high",
+                       f"{market['price'] / high - 1:+.1%}" if high else "n/a",
+                       help=(f"52-week range: {low:,.2f} to {high:,.2f}" if low and high
+                             else None))
+        cols[3].metric("Beta", f"{market['beta']:.2f}" if market["beta"] else "n/a",
+                       help="How much the share tends to move with the market. 1 = in line; "
+                            "above 1 = more volatile; below 1 = less.")
+        if market["price_to_book"] or market["ev_to_ebitda"]:
+            cols = st.columns(4)
+            cols[0].metric("Price-to-book", ratio(market["price_to_book"]),
+                           help="Market value ÷ the accounting value of shareholders' equity.")
+            cols[1].metric("EV/EBITDA", ratio(market["ev_to_ebitda"]),
+                           help="Enterprise value (market value + net debt) ÷ EBITDA. "
+                                "Widely used to compare companies' valuations.")
+
+        period = st.segmented_control("Period", ["1 year", "5 years"], default="1 year",
+                                      label_visibility="collapsed") or "1 year"
+        st.altair_chart(performance_chart(market, 1 if period == "1 year" else 5, n["ticker"]),
+                        width="stretch")
+
+        st.subheader("What analysts say")
+        a = market["analysts"]
+        if not a:
+            st.info("No analyst ratings found for this company.")
+        else:
+            st.caption("Ratings and price targets from professional analysts at banks and "
+                       "brokers, as collected by Yahoo Finance. These are their views, not "
+                       "a recommendation from this tool.")
+            left, right = st.columns([2, 3])
+            with left:
+                st.metric("Consensus", a["consensus"] or "n/a",
+                          help="The average rating on a 1-5 scale (1 = Strong Buy, "
+                               "5 = Strong Sell)"
+                               + (f": {a['score']:.1f}." if a["score"] else "."))
+                if a["target"]:
+                    st.metric("Average price target",
+                              f"{SYMBOLS.get(mcur, mcur + ' ')}{a['target']:,.2f}",
+                              delta=(f"{a['upside']:+.1%} vs current price"
+                                     if a["upside"] is not None else None),
+                              help=(f"Analysts' targets range from {a['target_low']:,.2f} to "
+                                    f"{a['target_high']:,.2f}. Targets are usually for 12 "
+                                    "months ahead." if a["target_low"] and a["target_high"]
+                                    else None))
+            if a["total"]:
+                right.altair_chart(analyst_chart(a["counts"]), width="stretch")
+            notes = []
+            if a["total"] and a["total"] < 6:
+                notes.append(f"Only {a['total']} analysts are counted, so the consensus is a "
+                             "small sample"
+                             + (": Yahoo counts analysts covering the US-listed shares, and "
+                                "many more cover this company in its home market."
+                                if market["foreign"] else "."))
+            if a["upside"] is not None and abs(a["upside"]) > 0.5:
+                notes.append("The average target is far from today's price, a sign that "
+                             "analysts' expectations differ sharply from the market's.")
+            notes.append("Analysts' ratings and targets are often wrong, and can be "
+                         "influenced by their firm's relationship with the company.")
+            st.caption(" ".join(notes))
+
+    st.subheader("Dividends and buybacks")
+    returns = shareholder_returns(n["now"])
+    cols = st.columns(3)
+    cols[0].metric("Dividends paid", money(returns["dividends"], cur)
+                   if pd.notna(returns["dividends"]) and returns["dividends"] > 0 else "None")
+    cols[1].metric("Share buybacks", money(returns["buybacks"], cur)
+                   if pd.notna(returns["buybacks"]) and returns["buybacks"] > 0 else "None")
+    cols[2].metric("Dividend payout ratio",
+                   f"{returns['payout']:.0%}" if returns["payout"] is not None else "n/a",
+                   help="Dividends as a share of profit. " + returns["payout_text"].capitalize())
+    st.caption(f"{'Last 12 months' if n['quarterly'] else 'Latest financial year'}, from the "
+               "cash flow statement in the company's SEC filings. Buybacks return cash by "
+               "reducing the number of shares, which raises each remaining share's slice "
+               "of profit.")
+
+    left, right = st.columns(2)
+    if n["quarters"][["Dividends paid", "Share buybacks"]].notna().any().any():
+        left.altair_chart(returns_chart(n["quarters"], cur, n["quarterly"]), width="stretch")
+    if market is not None and not market["dividends_by_year"].empty:
+        right.altair_chart(year_bars(market["dividends_by_year"],
+                                     f"Dividend per share by year ({market['currency']})",
+                                     "Dividend per share"), width="stretch")
+        if market["dividends_look_stale"]:
+            right.caption("Yahoo's dividend history for this company looks incomplete "
+                          "(no recent payments recorded), so recent years may be missing.")
+        elif market["foreign"]:
+            right.caption("Per US-listed share (ADR).")
+    st.caption("Share price data from Yahoo Finance and may be delayed. "
+               "For research and learning, not investment advice.")
+
+# --- Tab 3: AI report ------------------------------------------------------------
 with ai_tab:
     if n["quarterly"]:
         st.markdown("Claude reads the last two earnings releases and the latest 10-K/10-Q, "
@@ -324,7 +546,7 @@ with ai_tab:
                     output.markdown("".join(streamed))
 
             with st.spinner("Claude is writing the report..."):
-                report, usage, cost = run_ai_report(n, documents, on_text=show,
+                report, usage, cost = run_ai_report(n_ai, documents, on_text=show,
                                                     api_key=own_key)
             output.empty()
             # Reports paid for with a visitor's own key stay private to them:
@@ -332,10 +554,10 @@ with ai_tab:
             if own_key:
                 saved_as = None
             else:
-                saved_as = save_report(n, documents, report).name
+                saved_as = save_report(n_ai, documents, report).name
             st.session_state.report = {
                 "ticker": n["ticker"], "text": report, "cost": cost, "saved_as": saved_as,
-                "markdown": report_markdown(n, documents, report),
+                "markdown": report_markdown(n_ai, documents, report),
                 "tokens": (usage.input_tokens, usage.output_tokens)}
         except Exception as error:
             st.error(explain_error(error))
@@ -349,7 +571,7 @@ with ai_tab:
                            file_name=f"{n['ticker']}_report.md", mime="text/markdown")
         st.markdown(saved["text"])
 
-# --- Tab 3: saved reports --------------------------------------------------------
+# --- Tab 4: saved reports --------------------------------------------------------
 with saved_tab:
     # Your own reports first, then the examples that come with the project.
     files = [p for folder in (REPORTS_FOLDER, EXAMPLES_FOLDER) if folder.exists()
