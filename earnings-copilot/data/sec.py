@@ -429,8 +429,14 @@ def get_financials(ticker):
     recent = table.tail(4)
     is_bank = bool(recent["Deposits"].notna().any() and recent["Net interest income"].notna().any())
 
+    # Diluted share count from the latest results (a backup for per-share
+    # values when there's no market data).
+    shares = facts.get("WeightedAverageNumberOfDilutedSharesOutstanding", {}) \
+        .get("units", {}).get("shares", [])
+    latest_shares = max(shares, key=lambda e: (e["end"], e["filed"]))["val"] if shares else None
+
     return {**company, "table": table, "standard": standard, "currency": currency,
-            "quarterly": quarterly, "is_bank": is_bank}
+            "quarterly": quarterly, "is_bank": is_bank, "diluted_shares": latest_shares}
 
 
 def get_quarterly_financials(ticker):

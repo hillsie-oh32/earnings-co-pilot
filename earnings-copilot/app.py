@@ -17,6 +17,8 @@ from analysis.report import (build_numbers, get_documents, run_ai_report, save_r
                              report_markdown, REPORTS_FOLDER, EXAMPLES_FOLDER)
 from analysis.peers import (compare, summary as peer_summary, COLUMNS as PEER_COLUMNS,
                             FORMATS as PEER_FORMATS)
+from analysis.dcf import (default_assumptions, run_dcf, implied_growth, sensitivity,
+                          RISK_FREE, EQUITY_PREMIUM)
 from analysis.report import shareholder_returns
 from data.market import get_market_data, get_quote, market_as_text, MarketDataUnavailable
 from data.peers import suggest_peers, all_companies
@@ -54,7 +56,8 @@ pack in about three minutes.**
    and history, buybacks, results vs analysts' expectations, and analysts' consensus
    ratings and price targets.
 4. **Compares it with its peers:** similar companies side by side on growth, margins,
-   valuation and red flags, with the peer median.
+   valuation and red flags, with the peer median. An interactive **DCF valuation**
+   shows what growth the share price implies.
 5. **Has Claude (Anthropic's AI) read the actual documents** and write a briefing pack:
    results summary, change in management tone, red flags explained, the questions
    analysts are likely to ask (with draft answers), a company brief, and questions to
@@ -314,8 +317,9 @@ market, market_error = load_market(n["ticker"], not n["quarterly"])
 # The AI report gets the market data too, when it's available.
 n_ai = {**n, "market_text": market_as_text(market)} if market else n
 
-numbers_tab, market_tab, peers_tab, ai_tab, saved_tab = st.tabs(
-    ["Numbers & red flags", "Market & dividends", "Peers", "AI report", "Saved reports"])
+numbers_tab, market_tab, peers_tab, dcf_tab, ai_tab, saved_tab = st.tabs(
+    ["Numbers & red flags", "Market & dividends", "Peers", "Valuation (DCF)", "AI report",
+     "Saved reports"])
 
 # --- Tab 1: the numbers ----------------------------------------------------------
 with numbers_tab:
@@ -635,7 +639,172 @@ with peers_tab:
                                  .get(kinds[metric], ",.2f"))],
         ).properties(height=40 * len(data) + 40), width="stretch")
 
-# --- Tab 4: AI report ------------------------------------------------------------
+# --- Tab 4: DCF valuation ------------------------------------------------------------
+with dcf_tab:
+    st.markdown("A **discounted cash flow (DCF)** model values a business by the cash it "
+                "will generate in future, discounted back to today. Move the sliders to "
+                "test different assumptions.")
+    st.caption("An illustrative model for learning and discussion, not a valuation or a "
+               "recommendation. The answer depends entirely on the assumptions.")
+
+    if n["is_bank"]:
+        st.info("A DCF doesn't suit banks: their 'cash flow' mostly reflects customers "
+                "moving deposits and loans, and debt is their raw material rather than "
+                "funding. Banks are usually valued on price-to-book against return on "
+                "equity, or on their dividends. See the bank measures in the Numbers and "
+                "Peers tabs.")
+    elif not n["quarterly"]:
+        st.info("The DCF is available for US companies. For foreign companies, the "
+                "accounts are in their home currency while the US-listed share (ADR) is "
+                "priced in dollars and may represent several home-market shares, so a "
+                "per-share value can't be compared reliably with the price.")
+    elif pd.isna(n["now"]["Revenue"]) or n["now"]["Revenue"] <= 0:
+        st.info("A DCF needs a revenue history to project forward, and this company "
+                "doesn't report revenue yet.")
+    else:
+        if n["sic"] and 6000 <= n["sic"] < 6500:
+            st.warning("This is a financial company (insurer, broker or finance firm). A "
+                       "DCF is less suitable here, because cash flows mix the company's own "
+                       "money with customers' money. Treat the result with extra caution.",
+                       icon=":material/warning:")
+        base = default_assumptions(n, market)
+        prefix = f"dcf_{n['ticker']}_"
+        defaults = {"growth": base["growth"] * 100, "margin": base["margin"] * 100,
+                    "terminal": base["terminal_growth"] * 100,
+                    "rate": base["discount_rate"] * 100}
+        for k, v in defaults.items():
+            st.session_state.setdefault(prefix + k, round(v * 4) / 4)  # nearest 0.25
+
+        def reset():
+            for k, v in defaults.items():
+                st.session_state[prefix + k] = round(v * 4) / 4
+
+        st.subheader("Assumptions")
+        left, right = st.columns(2)
+        growth = left.slider(
+            "Revenue growth per year, years 1-5", -10.0, 40.0, step=0.25, format="%.2f%%",
+            key=prefix + "growth",
+            help=f"Starts at the last 12 months' growth ({base['growth']:.1%}), limited "
+                 "to -5% to 25%.") / 100
+        margin = left.slider(
+            "Free cash flow margin", -20.0, 60.0, step=0.25, format="%.2f%%",
+            key=prefix + "margin",
+            help=f"Free cash flow as a share of revenue. Starts at the last 12 months' "
+                 f"figure ({base['margin']:.1%}).") / 100
+        terminal = right.slider(
+            "Long-term growth after year 5", 0.0, 4.0, step=0.25, format="%.2f%%",
+            key=prefix + "terminal",
+            help="Growth assumed every year after year 5, forever. Usually close to "
+                 "long-run inflation (2-3%): nothing outgrows the economy for ever.") / 100
+        rate = right.slider(
+            "Discount rate (WACC)", 5.0, 15.0, step=0.25, format="%.2f%%",
+            key=prefix + "rate",
+            help=f"The return investors require for the risk. Starts at the weighted "
+                 f"average cost of capital: cost of equity {base['cost_of_equity']:.1%} "
+                 f"(risk-free {RISK_FREE:.2%} + beta {base['beta']:.2f} × equity risk "
+                 f"premium {EQUITY_PREMIUM:.0%}), blended with the cost of debt.") / 100
+        st.button("Reset to starting assumptions", on_click=reset)
+
+        args = (base["revenue"], growth, margin, terminal, rate, base["net_debt"],
+                base["shares"])
+        result = run_dcf(*args)
+        if result is None:
+            st.error("The discount rate must be higher than the long-term growth rate: "
+                     "otherwise the value of cash flows 'for ever' never stops growing.")
+        else:
+            price = market["price"] if market else None
+            per_share = result["per_share"]
+            st.subheader("Result")
+            cols = st.columns(4)
+            cols[0].metric("Model value per share",
+                           f"${per_share:,.2f}" if per_share is not None else "n/a",
+                           delta=(f"{per_share / price - 1:+.1%} vs price"
+                                  if per_share is not None and price else None),
+                           delta_color="off",
+                           help=f"Current share price: ${price:,.2f}" if price else None)
+            cols[1].metric("Enterprise value", money(result["enterprise_value"], cur),
+                           help="Value of the whole business: today's value of the cash "
+                                "flows in years 1-5 plus the terminal value.")
+            cols[2].metric("Equity value", money(result["equity_value"], cur),
+                           help="Enterprise value minus net debt (or plus net cash): "
+                                "what's left for shareholders.")
+            cols[3].metric("From the terminal value",
+                           f"{result['terminal_share']:.0%}" if result["terminal_share"]
+                           else "n/a",
+                           help="The share of the value coming from years after year 5. "
+                                "Typically 60-80%, which is why the long-term "
+                                "assumptions matter so much.")
+
+            implied = implied_growth(price, base["revenue"], margin, terminal, rate,
+                                     base["net_debt"], base["shares"]) if price else None
+            if implied is not None:
+                st.info(f"**What the share price implies (reverse DCF):** with your other "
+                        f"assumptions, today's price of ${price:,.2f} is consistent with "
+                        f"revenue growth of **{implied:.1%} a year** for five years. Its "
+                        f"recent growth was {base['growth']:.1%}. Whether that looks "
+                        "achievable is the real question a DCF helps you ask.",
+                        icon=":material/lightbulb:")
+
+            left, right = st.columns(2)
+            projection = result["projection"].copy()
+            projection["Year"] = projection["Year"].map(lambda y: f"Year {y}")
+            chart_data = projection.melt(id_vars="Year",
+                                         value_vars=["Free cash flow", "Present value"],
+                                         var_name="Measure", value_name="Amount")
+            chart_data["Amount"] = chart_data["Amount"] / 1e9
+            names = ["Free cash flow", "Present value"]
+            left.altair_chart(alt.Chart(
+                chart_data, title=f"Projected free cash flow ({cur} bn)").mark_bar(
+                cornerRadiusEnd=4).encode(
+                x=alt.X("Year:N", title=None, axis=alt.Axis(labelAngle=0)),
+                xOffset=alt.XOffset("Measure:N", sort=names),
+                y=alt.Y("Amount:Q", title=None, axis=alt.Axis(grid=True, gridOpacity=0.3)),
+                color=alt.Color("Measure:N", scale=alt.Scale(domain=names, range=SERIES[:2]),
+                                legend=alt.Legend(orient="top", title=None)),
+                tooltip=[alt.Tooltip("Year:N"), alt.Tooltip("Measure:N"),
+                         alt.Tooltip("Amount:Q", format=",.1f")],
+            ).properties(height=260), width="stretch")
+            right.caption("'Present value' is each year's cash flow discounted to today: "
+                          "cash further in the future is worth less.")
+            shown = projection.set_index("Year")[["Revenue", "Free cash flow",
+                                                  "Present value"]] / 1e9
+            right.dataframe(shown.style.format("{:,.1f}"), width="stretch")
+            right.caption(f"{cur} bn. Terminal value: {money(result['terminal_value'], cur)}, "
+                          f"worth {money(result['terminal_pv'], cur)} today.")
+
+            st.subheader("Sensitivity: value per share")
+            st.caption("Rows: discount rate. Columns: long-term growth. The centre is your "
+                       "chosen assumptions. Small changes move the answer a lot.")
+            grid = sensitivity(*args)
+
+            def highlight_centre(frame):
+                styles = pd.DataFrame("", index=frame.index, columns=frame.columns)
+                styles.iloc[2, 2] = "font-weight: bold; text-decoration: underline"
+                return styles
+
+            st.dataframe(grid.style.format("${:,.2f}", na_rep="n/a")
+                         .apply(highlight_centre, axis=None), width="stretch")
+
+        with st.expander("How this model works, and its simplifications"):
+            st.markdown(f"""
+1. **Revenue** starts from the last 12 months ({money(base['revenue'], cur)}) and grows at
+   your chosen rate for 5 years.
+2. **Free cash flow** each year = revenue × your FCF margin. Free cash flow here is
+   operating cash flow minus capital spending, a simple stand-in for the "unlevered"
+   cash flow a full model would build from operating profit.
+3. **Terminal value** = year 5 free cash flow × (1 + long-term growth) ÷ (discount rate −
+   long-term growth): the value of every year after year 5.
+4. **Enterprise value** = all of these discounted to today. **Equity value** = enterprise
+   value − net debt ({money(base['net_debt'], cur)}). **Per share** = equity value ÷
+   {f"{base['shares'] / 1e9:,.2f}bn" if base['shares'] else "the number of"} shares.
+
+**Simplifications:** one growth rate for all 5 years; a constant margin; the discount
+rate uses fixed market assumptions (risk-free rate {RISK_FREE:.2%}, equity risk premium
+{EQUITY_PREMIUM:.0%}) and Yahoo's beta, limited to 0.8-2.0. Real models forecast each line
+of the accounts and vary these over time.
+""")
+
+# --- Tab 5: AI report ------------------------------------------------------------
 with ai_tab:
     if n["quarterly"]:
         st.markdown("Claude reads the last two earnings releases and the latest 10-K/10-Q, "
@@ -723,7 +892,7 @@ with ai_tab:
                            file_name=f"{n['ticker']}_report.md", mime="text/markdown")
         st.markdown(saved["text"])
 
-# --- Tab 5: saved reports --------------------------------------------------------
+# --- Tab 6: saved reports --------------------------------------------------------
 with saved_tab:
     # Your own reports first, then the examples that come with the project.
     files = [p for folder in (REPORTS_FOLDER, EXAMPLES_FOLDER) if folder.exists()
