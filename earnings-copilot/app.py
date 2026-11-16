@@ -7,6 +7,7 @@ It opens in your browser at http://localhost:8501
 
 import hmac
 import os
+from html import escape
 
 import altair as alt
 import pandas as pd
@@ -25,11 +26,72 @@ from data.peers import suggest_peers, all_companies
 from data.insiders import get_insider_trades, insiders_as_text, summarise as summarise_insiders
 from data.sec import CompanyNotSupported
 
-st.set_page_config(page_title="Earnings Copilot", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Earnings Copilot", page_icon=":material/query_stats:",
+                   layout="wide")
 
 # Chart colours: a colour-blind-safe palette, with darker-background versions.
 DARK = getattr(getattr(st.context, "theme", None), "type", "light") == "dark"
 SERIES = ["#3987e5", "#d95926", "#199e70"] if DARK else ["#2a78d6", "#eb6834", "#1baf7a"]
+
+# Colours for the hand-built parts of the page (the main theme is in
+# .streamlit/config.toml). They're mixed from the page's own text colour, so
+# they work in both light and dark mode, whichever one the page is showing.
+INK = "inherit"
+MUTED = "color-mix(in srgb, currentColor 68%, transparent)"
+ACCENT = "#3a6fc4"  # a mid navy-blue, readable on white and on dark backgrounds
+LINE = "color-mix(in srgb, currentColor 14%, transparent)"
+PANEL = "color-mix(in srgb, currentColor 3%, transparent)"
+UP, DOWN = "#1e9a68", "#d64545"
+
+STYLE = f"""<style>
+[data-testid="stMainBlockContainer"] {{ max-width: 1180px; padding-top: 1.5rem; }}
+[data-testid="stHeader"] {{ background: transparent; }}
+/* Figures sit in light cards, like a factsheet. */
+[data-testid="stMetric"] {{ border: 1px solid {LINE}; border-radius: 8px;
+    padding: 0.7rem 0.9rem; background: {PANEL}; }}
+.ec-bar {{ display: flex; justify-content: space-between; align-items: center;
+    border-bottom: 1px solid {LINE}; padding-bottom: 0.6rem; }}
+.ec-mark {{ display: flex; align-items: center; gap: 0.55rem; font-weight: 700;
+    font-size: 1.05rem; color: {INK}; letter-spacing: -0.01em; }}
+.ec-logo {{ display: flex; align-items: flex-end; gap: 2px; height: 18px; }}
+.ec-logo span {{ width: 5px; background: {ACCENT}; border-radius: 1px; }}
+.ec-links a {{ color: {MUTED}; text-decoration: none; font-size: 0.9rem; margin-left: 1.2rem; }}
+.ec-links a:hover {{ color: {ACCENT}; }}
+.ec-hero {{ padding: 2.6rem 0 1.2rem; max-width: 760px; }}
+.ec-eyebrow {{ text-transform: uppercase; letter-spacing: 0.12em; font-size: 0.75rem;
+    font-weight: 600; color: {ACCENT}; margin-bottom: 0.8rem; }}
+.ec-title {{ font-family: "Source Serif 4", Georgia, serif; font-size: 3rem; line-height: 1.08;
+    font-weight: 700; color: {INK}; margin: 0 0 1rem; letter-spacing: -0.02em; }}
+.ec-lede {{ font-size: 1.12rem; line-height: 1.6; color: {MUTED}; margin: 0; }}
+.ec-step {{ border-top: 2px solid {ACCENT}; padding-top: 0.8rem; }}
+.ec-step-n {{ font-size: 0.8rem; font-weight: 600; color: {ACCENT}; letter-spacing: 0.08em; }}
+.ec-step-t {{ font-weight: 600; color: {INK}; margin: 0.25rem 0 0.35rem; font-size: 1.02rem; }}
+.ec-step-d {{ color: {MUTED}; font-size: 0.92rem; line-height: 1.55; }}
+.ec-facts {{ display: flex; flex-wrap: wrap; gap: 0.6rem 2.2rem; padding: 1rem 0;
+    border-top: 1px solid {LINE}; border-bottom: 1px solid {LINE}; }}
+.ec-fact b {{ display: block; font-size: 1.35rem; color: {INK};
+    font-family: "Source Serif 4", Georgia, serif; }}
+.ec-fact span {{ color: {MUTED}; font-size: 0.85rem; }}
+.ec-co {{ display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1rem 2rem;
+    align-items: flex-end; padding: 1.2rem 0 1rem; border-bottom: 1px solid {LINE}; }}
+.ec-co-name {{ font-family: "Source Serif 4", Georgia, serif; font-size: 2rem;
+    font-weight: 700; color: {INK}; line-height: 1.15; letter-spacing: -0.01em; }}
+.ec-co-meta {{ color: {MUTED}; font-size: 0.9rem; margin-top: 0.4rem; }}
+.ec-chip {{ display: inline-block; border: 1px solid {LINE}; border-radius: 4px;
+    padding: 0 0.4rem; font-weight: 600; color: {INK}; margin-right: 0.4rem;
+    font-size: 0.82rem; }}
+.ec-stats {{ display: flex; gap: 2rem; flex-wrap: wrap; }}
+.ec-stat span {{ display: block; color: {MUTED}; font-size: 0.78rem;
+    text-transform: uppercase; letter-spacing: 0.06em; }}
+.ec-stat b {{ font-size: 1.3rem; color: {INK}; font-weight: 600; }}
+.ec-stat i {{ font-style: normal; font-size: 0.88rem; margin-left: 0.35rem; }}
+.ec-foot {{ margin-top: 3rem; padding: 1.2rem 0 0.5rem; border-top: 1px solid {LINE};
+    color: {MUTED}; font-size: 0.85rem; line-height: 1.6; }}
+.ec-foot a {{ color: {MUTED}; }}
+@media (max-width: 640px) {{ .ec-title {{ font-size: 2.2rem; }}
+    [data-testid="stMainBlockContainer"] {{ padding-top: 3.2rem; }}
+    .ec-co-name {{ font-size: 1.6rem; }} .ec-links a {{ margin-left: 0.8rem; }} }}
+</style>"""
 
 # Each red-flag status gets an icon and a word as well as a colour, so it never
 # relies on colour alone.
@@ -266,30 +328,117 @@ def show_chart(column, df, field, chart, *args):
         column.caption(f"No {label} figures reported.")
 
 
+# Words that stay in capitals when tidying a company name.
+ACRONYMS = {"PLC", "AG", "SA", "NV", "SE", "ASA", "LLC", "LP", "ADR", "HSBC", "BP", "SAP",
+            "ASML", "UBS", "IBM", "CVS", "JD", "NIO", "PDD", "AB", "AS", "SPA", "II", "III",
+            "USA", "US", "UK", "PJSC", "KGAA", "BHP", "RELX", "ING", "NXP", "ABB", "GSK"}
+
+
+def display_name(name, ticker):
+    """'TOYOTA MOTOR CORP/' -> 'Toyota Motor Corp'. SEC names are often in capitals
+    with a state code on the end (e.g. 'APPLE INC /CA/')."""
+    name = name.strip().rstrip("/").strip()
+    if "/" in name and len(name.rsplit("/", 1)[1]) <= 3:
+        name = name.rsplit("/", 1)[0].strip()
+    if not name.isupper():
+        return name
+    words = []
+    for word in name.split():
+        core = word.strip(".,()").upper()
+        if core == "JPMORGAN":
+            words.append("JPMorgan")
+        else:
+            words.append(word if core in ACRONYMS or core == ticker.upper().split("-")[0]
+                         else word.title())
+    return " ".join(words)
+
+
 def choose(query):
-    st.session_state.query = query
+    if query and query.strip():
+        st.session_state.query = query.strip()
+        st.session_state.pop("report", None)
+
+
+def go_home():
+    st.session_state.pop("query", None)
     st.session_state.pop("report", None)
 
 
-# --- Page ---------------------------------------------------------------------
-st.title("📊 Earnings Copilot")
-st.caption("Official SEC filings, analysed by code and AI. Covers US-listed companies, "
-           "including UK, European, Japanese and Chinese companies with US-listed shares.")
+def footer():
+    st.html(f"""<div class="ec-foot">
+      Figures from SEC filings (EDGAR). Share prices, valuations and analyst ratings from
+      Yahoo Finance, which may be delayed. A research and learning tool, not investment advice.<br>
+      Built by a second-year Accounting &amp; Finance student with Python, Streamlit and the
+      Claude API &middot; <a href="{GITHUB}" target="_blank">Source code and documentation</a>
+    </div>""")
 
-with st.form("search"):
-    left, right = st.columns([3, 1], vertical_alignment="bottom")
-    query = left.text_input("Company name or ticker", value="Apple",
-                            help="e.g. Apple, AAPL, JP Morgan, HSBC, Toyota, SAP, BRK.B")
+
+# Companies visitors can try in one click from the home page.
+EXAMPLES = [("Apple", "AAPL"), ("Kraft Heinz", "KHC"), ("Nvidia", "NVDA"),
+            ("JPMorgan", "JPM"), ("HSBC", "HSBC"), ("Toyota", "TM")]
+
+# --- Page ---------------------------------------------------------------------
+st.html(STYLE)
+home = "query" not in st.session_state
+
+st.html(f"""<div class="ec-bar">
+  <div class="ec-mark"><div class="ec-logo"><span style="height:8px"></span>
+    <span style="height:13px"></span><span style="height:18px"></span></div>Earnings Copilot</div>
+  <div class="ec-links"><a href="{GITHUB}#readme" target="_blank">How it works</a>
+    <a href="{GITHUB}" target="_blank">GitHub</a></div>
+</div>""")
+
+if home:
+    st.html("""<div class="ec-hero">
+      <div class="ec-eyebrow">Equity research from the source filings</div>
+      <div class="ec-title">Read a company's results like an analyst.</div>
+      <p class="ec-lede">Type a company. Get its numbers, an accounting red-flag scan,
+      market valuation, peers, a DCF and insider dealing, all built from official SEC
+      filings. Then have Claude read the documents and write the briefing pack.</p>
+    </div>""")
+
+with st.form("search", border=False):
+    left, right = st.columns([4, 1], vertical_alignment="bottom")
+    query = left.text_input("Company name or ticker", placeholder="e.g. Apple, KHC, HSBC, Toyota",
+                            label_visibility="collapsed" if not home else "visible",
+                            help="Names and tickers both work: Apple, AAPL, JP Morgan, HSBC, "
+                                 "Toyota, SAP, BRK.B")
     if right.form_submit_button("Analyse", type="primary", width="stretch"):
         choose(query)
 
-# About the project: open on the home page, folded away once a company is shown.
-with st.expander("ℹ️ About this project", expanded="query" not in st.session_state):
-    st.markdown(ABOUT)
+if home:
+    with st.container(horizontal=True, vertical_alignment="center"):
+        st.caption("Try one:", width="content")
+        for label, ticker in EXAMPLES:
+            st.button(label, key=f"try-{ticker}", on_click=choose, args=(ticker,))
 
-if "query" not in st.session_state:
-    st.info("Enter a company name or ticker above and press **Analyse**.")
+    st.write("")
+    steps = [
+        ("01", "The numbers", "Growth, margins, free cash flow and net debt, calculated "
+         "in Python from the company's own SEC data. No AI guesswork in the figures."),
+        ("02", "The red flags", "Checks an auditor would run: receivables, cash conversion, "
+         "inventory, goodwill, leverage and the Beneish M-Score. Banks get bank checks."),
+        ("03", "The briefing pack", "Claude reads the earnings releases and annual report, "
+         "explains the flags, tracks management's tone and drafts the analyst Q&A."),
+    ]
+    for col, (number, title, text) in zip(st.columns(3, gap="large"), steps):
+        col.html(f'<div class="ec-step"><div class="ec-step-n">{number}</div>'
+                 f'<div class="ec-step-t">{title}</div><div class="ec-step-d">{text}</div></div>')
+
+    st.write("")
+    st.html("""<div class="ec-facts">
+      <div class="ec-fact"><b>5 regions</b><span>US, UK, Europe, Japan, China</span></div>
+      <div class="ec-fact"><b>7 views</b><span>Numbers to insider trades</span></div>
+      <div class="ec-fact"><b>73 companies</b><span>used to stress-test it</span></div>
+      <div class="ec-fact"><b>Every figure</b><span>traced to an official filing</span></div>
+    </div>""")
+    st.write("")
+    with st.expander("About this project"):
+        st.markdown(ABOUT)
+    footer()
     st.stop()
+
+st.button("← Home", on_click=go_home, type="tertiary")
 
 try:
     with st.spinner(f"Fetching {st.session_state.query} from the SEC..."):
@@ -303,7 +452,33 @@ except Exception as error:
     st.stop()
 
 cur = n["currency"]
-st.header(f"{n['name']} ({n['ticker']})")
+market, market_error = load_market(n["ticker"], not n["quarterly"])
+
+# The company header: who it is, and the key facts before opening any tab.
+stats = []
+if market:
+    symbol = SYMBOLS.get(market["currency"], market["currency"] + " ")
+    change = market["day_change"]
+    move = (f'<i style="color:{UP if change >= 0 else DOWN}">'
+            f'{"▲" if change >= 0 else "▼"} {abs(change):.2%}</i>' if change is not None else "")
+    stats += [("Share price", f"{symbol}{market['price']:,.2f}{move}"),
+              ("Market value", money(market["market_cap"], market["currency"]))]
+raised = [f for f in n["flags"] if f["status"] in ("RED", "AMBER")]
+reds = sum(f["status"] == "RED" for f in n["flags"])
+stats.append(("Red flags", (f"{len(raised)} of {len(n['flags'])}"
+                            + (f' <i style="color:{DOWN}">{reds} red</i>' if reds else ""))
+              if raised else f'<span style="color:{UP}">None raised</span>'))
+meta = [n["industry"].title() if n.get("industry") else None,
+        "US filer, quarterly figures" if n["quarterly"] else "Foreign filer, annual figures",
+        f"Reports in {cur}"]
+st.html(f"""<div class="ec-co">
+  <div><div class="ec-co-name">{escape(display_name(n['name'], n['ticker']))}</div>
+    <div class="ec-co-meta"><span class="ec-chip">{escape(n['ticker'])}</span>
+      {" · ".join(escape(m) for m in meta if m)}</div></div>
+  <div class="ec-stats">{"".join(f'<div class="ec-stat"><span>{label}</span><b>{value}</b></div>'
+                                 for label, value in stats)}</div>
+</div>""")
+
 if n["matched_name"]:
     st.caption(f"Matched from “{st.session_state.query}”. Not the right company?")
     if n["alternatives"]:
@@ -315,13 +490,14 @@ for note in n["notes"]:
 for warning in n["warnings"]:
     st.warning(warning, icon=":material/warning:")
 
-market, market_error = load_market(n["ticker"], not n["quarterly"])
 # The AI report gets the market data too, when it's available.
 n_ai = {**n, "market_text": market_as_text(market)} if market else n
 
 numbers_tab, market_tab, peers_tab, dcf_tab, insiders_tab, ai_tab, saved_tab = st.tabs(
-    ["Numbers & red flags", "Market & dividends", "Peers", "Valuation (DCF)", "Insiders",
-     "AI report", "Saved reports"])
+    [":material/table_chart: Numbers & red flags", ":material/show_chart: Market & dividends",
+     ":material/compare_arrows: Peers", ":material/calculate: Valuation (DCF)",
+     ":material/person_search: Insiders", ":material/article: AI report",
+     ":material/folder_open: Saved reports"])
 
 # --- Insiders: directors' and executives' own share trades (SEC Form 4) ---------------
 with insiders_tab:
@@ -429,18 +605,25 @@ with numbers_tab:
             for c in table.columns})
 
     st.subheader("Red-flag scan" + (" (bank checks)" if n["is_bank"] else ""))
+    counts = {s: sum(f["status"] == s for f in n["flags"]) for s in ("RED", "AMBER", "OK")}
+    st.markdown(" ".join(f"{BADGES[s]} × {c}" for s, c in counts.items() if c))
     st.caption(f"{'Last 12 months' if n['quarterly'] else 'Latest year'} vs the year before. "
                "A flag is a reason to look closer, not proof of a problem.")
-    for flag in n["flags"]:
-        # Badge and check name on one line, so they stay together on a phone.
-        check, detail = st.columns([3, 5])
-        check.markdown(f"{BADGES[flag['status']]} **{flag['check']}**")
-        if flag["value"] != "-":
-            check.text(flag["value"])
-        with detail:
-            st.markdown(flag["detail"])
-            if flag["status"] in ("RED", "AMBER") or n["is_bank"]:
-                st.caption(flag["why"])
+    # Raised flags first, each check in one bordered list.
+    order = {"RED": 0, "AMBER": 1, "OK": 2, "N/A": 3}
+    with st.container(border=True, gap="small"):
+        for i, flag in enumerate(sorted(n["flags"], key=lambda f: order[f["status"]])):
+            if i:
+                st.html(f'<div style="border-top:1px solid {LINE}"></div>')
+            # Badge and check name on one line, so they stay together on a phone.
+            check, detail = st.columns([3, 5])
+            check.markdown(f"{BADGES[flag['status']]} **{flag['check']}**")
+            if flag["value"] != "-":
+                check.caption(flag["value"])
+            with detail:
+                st.markdown(flag["detail"])
+                if flag["status"] in ("RED", "AMBER") or n["is_bank"]:
+                    st.caption(flag["why"])
     st.markdown("**Filing history (last 3 years):** " +
                 ("; ".join(n["history"]) if n["history"]
                  else "no auditor changes, restatements or late filings ✅"))
@@ -608,8 +791,6 @@ with market_tab:
                           "(no recent payments recorded), so recent years may be missing.")
         elif market["foreign"]:
             right.caption("Per US-listed share (ADR).")
-    st.caption("Share price data from Yahoo Finance and may be delayed. "
-               "For research and learning, not investment advice.")
 
 # --- Tab 3: peers -------------------------------------------------------------------
 with peers_tab:
@@ -958,3 +1139,5 @@ with saved_tab:
         st.download_button("Download", choice.read_bytes(), file_name=choice.name,
                            mime="text/markdown")
         st.markdown(choice.read_text(encoding="utf-8"))
+
+footer()

@@ -1,2 +1,33 @@
 [browser]
 gatherUsageStats = false
+
+# The look of the site: navy accents, Inter for text, a serif for headings
+# (the look of a printed research note).
+[theme]
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+headingFont = "Source Serif 4:https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,600;8..60,700&display=swap"
+headingFontSizes = ["2.4rem", "1.6rem", "1.25rem"]
+headingFontWeights = [700, 600, 600]
+baseRadius = "8px"
+showWidgetBorder = true
+metricValueFontSize = "1.7rem"
+
+[theme.light]
+primaryColor = "#1d3d6e"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f3f5f9"
+textColor = "#18212f"
+linkColor = "#1f5fbf"
+borderColor = "#dde3ec"
+dataframeHeaderBackgroundColor = "#eef2f8"
+blueColor = "#1f5fbf"
+
+[theme.dark]
+primaryColor = "#7fa8e6"
+backgroundColor = "#0e1522"
+secondaryBackgroundColor = "#172235"
+textColor = "#e6ebf2"
+linkColor = "#8db4ee"
+borderColor = "#2a3852"
+dataframeHeaderBackgroundColor = "#1b2840"
+blueColor = "#8db4ee"
