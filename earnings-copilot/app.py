@@ -355,10 +355,13 @@ with insiders_tab:
                                             "which says less about the insider's view.")
             shown = table.drop(columns=["Code"]).copy()
             shown["Date"] = shown["Date"].dt.strftime("%d %b %Y")
-            st.dataframe(shown.style.format({"Shares": "{:,.0f}", "Price": "${:,.2f}",
-                                             "Value": "${:,.0f}",
-                                             "Shares owned after": "{:,.0f}"}, na_rep=""),
-                         hide_index=True, width="stretch")
+            # Format as text ourselves so blanks stay blank (not "None").
+            for column, fmt in {"Shares": "{:,.0f}", "Price": "${:,.2f}", "Value": "${:,.0f}",
+                                "Shares owned after": "{:,.0f}"}.items():
+                shown[column] = [fmt.format(v) if pd.notna(v) else "" for v in shown[column]]
+            shown["Planned (10b5-1)"] = [{True: "Yes", False: "No"}.get(v, "")
+                                         for v in shown["Planned (10b5-1)"]]
+            st.dataframe(shown, hide_index=True, width="stretch")
             st.caption("Awards, option exercises and tax withholdings are routine pay "
                        "matters and aren't counted as buys or sales. Where connected "
                        "holders (e.g. a fund and its owner) report the same trade, it's "
@@ -649,8 +652,11 @@ with peers_tab:
             style = "font-weight: bold" if row.name in (0, len(table) - 1) else ""
             return [style] * len(row)
 
-        st.dataframe(table.style.format(formats, na_rep="n/a").apply(bold_rows, axis=1),
-                     hide_index=True, width="stretch")
+        # Format each figure as text ourselves, so missing ones always read "n/a".
+        shown = table.copy()
+        for column, fmt in formats.items():
+            shown[column] = [fmt.format(v) if pd.notna(v) else "n/a" for v in table[column]]
+        st.dataframe(shown.style.apply(bold_rows, axis=1), hide_index=True, width="stretch")
         st.caption("Market value is shown for US-dollar listings. 'Red flags' counts the "
                    "amber and red checks from each company's own red-flag scan. Valuations "
                    "and share prices from Yahoo Finance; everything else from SEC filings.")
@@ -829,8 +835,8 @@ with dcf_tab:
                 styles.iloc[2, 2] = "font-weight: bold; text-decoration: underline"
                 return styles
 
-            st.dataframe(grid.style.format("${:,.2f}", na_rep="n/a")
-                         .apply(highlight_centre, axis=None), width="stretch")
+            grid = grid.map(lambda v: f"${v:,.2f}" if pd.notna(v) else "n/a")
+            st.dataframe(grid.style.apply(highlight_centre, axis=None), width="stretch")
 
         with st.expander("How this model works, and its simplifications"):
             st.markdown(f"""
