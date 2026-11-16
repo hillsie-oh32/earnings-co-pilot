@@ -294,18 +294,23 @@ with numbers_tab:
     period_word = "quarter" if n["quarterly"] else "year"
     st.subheader("Last 12 months" if n["quarterly"] else "Latest financial year")
     now, ago = n["now"], n["ago"]
-    extra = [] if n["is_bank"] else ["Net debt"]
-    cols = st.columns(len(n["headlines"]) + len(extra))
-    for col, item in zip(cols, n["headlines"]):
+    tiles = []
+    for item in n["headlines"]:
         change = (now[item] / ago[item] - 1
                   if pd.notna(now[item]) and pd.notna(ago[item]) and ago[item] else None)
-        col.metric(item, money(now[item], cur),
-                   delta=f"{change:+.1%} vs prior year" if change is not None else None,
-                   delta_color="inverse" if item == "Credit loss provisions" else "normal")
-    if extra:
+        tiles.append(dict(label=item, value=money(now[item], cur),
+                          delta=f"{change:+.1%} vs prior year" if change is not None else None,
+                          delta_color="inverse" if item == "Credit loss provisions"
+                          else "normal"))
+    if not n["is_bank"]:
         net_debt = now["Net debt"]
-        cols[-1].metric("Net debt" if pd.isna(net_debt) or net_debt > 0 else "Net cash",
-                        money(abs(net_debt), cur) if pd.notna(net_debt) else "n/a")
+        tiles.append(dict(label="Net debt" if pd.isna(net_debt) or net_debt > 0 else "Net cash",
+                          value=money(abs(net_debt), cur) if pd.notna(net_debt) else "n/a"))
+    # At most 3 figures per row, so they aren't cut off on narrower screens.
+    per_row = 3 if len(tiles) > 4 else len(tiles)
+    for start in range(0, len(tiles), per_row):
+        for col, tile in zip(st.columns(per_row), tiles[start:start + per_row]):
+            col.metric(**tile)
 
     if pd.isna(ago["Net income"]):
         st.caption("Less than a year of history, so there is no prior-year comparison yet.")
