@@ -190,11 +190,83 @@ def run_ai_report(n, documents, on_text=None, api_key=None):
     return report, usage, cost
 
 
-def report_markdown(n, documents, report):
+STATUS_LABELS = {"RED": "**Red**", "AMBER": "**Amber**", "OK": "OK", "N/A": "n/a"}
+
+
+def _cell(value, kind):
+    """One table figure: money in millions with commas, or a percentage."""
+    if pd.isna(value):
+        return "n/a"
+    return f"{value:,.0f}" if kind == "money" else f"{value:.1f}%"
+
+
+def numbers_markdown(n, include_market=True):
+    """The calculated numbers as readable Markdown tables, for the saved report."""
+    cur = n["currency"]
+    period = "Last 12 months" if n["quarterly"] else "Latest year"
+    prior = "Previous 12 months" if n["quarterly"] else "Year before"
+    out = [f"### {period} vs {prior.lower()}", "",
+           f"| {cur} m | {prior} | {period} | Change |", "|:--|--:|--:|--:|"]
+    for item in n["headlines"]:
+        before, after = n["ago"][item], n["now"][item]
+        change = (f"{after / before - 1:+.1%}" if pd.notna(before) and pd.notna(after) and before
+                  else "n/a")
+        out.append(f"| {item} | {_cell(before / 1e6, 'money')} | {_cell(after / 1e6, 'money')} "
+                   f"| {change} |")
+    if not n["is_bank"] and pd.notna(n["now"]["Net debt"]):
+        net_debt = n["now"]["Net debt"]
+        out.append(f"| {'Net debt' if net_debt > 0 else 'Net cash'} | | "
+                   f"{abs(net_debt) / 1e6:,.0f} | |")
+    returns = shareholder_returns(n["now"])
+    out += ["", f"**Returned to shareholders:** dividends {returns['dividends_text']}, "
+                f"buybacks {returns['buybacks_text']}. Dividend payout: {returns['payout_text']}."]
+
+    # The recent periods, one row each.
+    snapshot = n["snapshot"]
+    names = [c.removesuffix(" m").removesuffix(" %") for c in snapshot.columns]
+    kinds = ["money" if c.endswith(" m") else "pct" for c in snapshot.columns]
+    out += ["", f"### Last {len(snapshot)} {n['period']}s ({cur} m)", "",
+            "| " + " | ".join([n["period"].title() + " ending", *names]) + " |",
+            "|:--|" + "--:|" * len(names)]
+    for when, row in snapshot.iterrows():
+        out.append(f"| {when:%b %Y} | "
+                   + " | ".join(_cell(v, k) for v, k in zip(row, kinds)) + " |")
+
+    # Red flags, the raised ones first.
+    order = {"RED": 0, "AMBER": 1, "OK": 2, "N/A": 3}
+    out += ["", "### Red-flag scan" + (" (bank checks)" if n["is_bank"] else ""), "",
+            "| Status | Check | Finding |", "|:--|:--|:--|"]
+    for f in sorted(n["flags"], key=lambda f: order[f["status"]]):
+        out.append(f"| {STATUS_LABELS[f['status']]} | {f['check']} | "
+                   f"{f['detail'].replace('|', '/').replace('->', '→')} |")
+    out += ["", "**Filing history (last 3 years):** "
+            + ("; ".join(n["history"]) if n["history"]
+               else "no auditor changes, restatements or late filings.")]
+
+    if include_market and n.get("market_text"):
+        out += ["", f"### Market data (Yahoo Finance, {date.today():%d %b %Y})", ""]
+        out += [f"- {line}" for line in n["market_text"].splitlines() if line.strip()]
+    if include_market and n.get("insiders_text"):
+        out += ["", "### Insider trading (SEC Form 4)", ""]
+        out += [f"- {line}" for line in n["insiders_text"].splitlines() if line.strip()]
+    return "\n".join(out)
+
+
+def report_markdown(n, documents, report, generated=None):
     """The full report as a Markdown document: numbers, AI write-up and sources."""
-    return (f"# Earnings Copilot: {n['name']} ({n['ticker']})\n\n"
-            f"_Generated {date.today():%d %B %Y}_\n\n"
-            f"## The numbers\n\n```\n{numbers_as_text(n)}\n```\n\n{report}\n\n---\n"
+    # Use the AI's own title (e.g. "Kraft Heinz (KHC): Q3 2026 Briefing Pack")
+    # as the document title, so the report doesn't have two.
+    title = f"{n['name']} ({n['ticker']})"
+    body = report.strip()
+    if body.startswith("# "):
+        title, _, body = body.partition("\n")
+        title, body = title[2:].strip(), body.strip()
+    body = body.removesuffix("---").strip()  # the sources line below has its own divider
+    when = generated or date.today()
+    return (f"# {title}\n\n"
+            f"_Earnings Copilot · generated {when:%d %B %Y} · figures in {n['currency']} "
+            f"from SEC filings_\n\n"
+            f"## The numbers\n\n{numbers_markdown(n)}\n\n---\n\n{body}\n\n---\n"
             f"_Sources: {'; '.join(d['title'] for d in documents)}. "
             f"Figures from SEC XBRL data._\n")
 
