@@ -41,7 +41,8 @@ directors and executives where relevant (e.g. in red flags or interview question
 remembering that sales under pre-arranged 10b5-1 plans say less about an insider's view.
 - If a document is marked as truncated, mention once that later parts of it were \
 not reviewed, and don't guess at what they contain.
-- The calculated numbers were produced by code from the company's official SEC data. \
+- The calculated numbers were produced by code from the company's official filed data \
+(SEC filings, or for UK and European companies the machine-readable annual report). \
 Treat them as correct.
 - Be balanced: give the bull and bear reading where it matters, and say when a \
 red flag has an innocent explanation in the documents.

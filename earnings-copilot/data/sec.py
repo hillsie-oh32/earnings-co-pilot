@@ -81,6 +81,9 @@ FLOW_TAGS = {
         "Share buybacks": ["PaymentsToAcquireOrRedeemEntitysShares"],
         # Banks
         "Net interest income": ["InterestRevenueExpense"],
+        # Some banks (e.g. BNP Paribas) report the two sides separately.
+        "Interest income": ["RevenueFromInterest", "InterestIncome"],
+        "Interest expense": ["InterestExpense"],
         "Fee & other income": ["FeeAndCommissionIncomeExpense"],
         "Fee income": ["FeeAndCommissionIncome"],
         "Fee expense": ["FeeAndCommissionExpense"],
@@ -88,7 +91,10 @@ FLOW_TAGS = {
         "Credit loss provisions": [
             "AdjustmentsForImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLossLoansAndAdvances",
             "AdjustmentsForImpairmentLossesReversalOfImpairmentLossesRecognisedInProfitOrLossFinancialAssets",
-            "ImpairmentLossOnFinancialAssets"],
+            "ImpairmentLossOnFinancialAssets",
+            "ImpairmentLossImpairmentGainAndReversalOfImpairmentLossDeterminedInAccordanceWithIFRS9",
+            # e.g. Lloyds: a bank's impairment charge is almost all loan losses.
+            "ImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss"],
     },
 }
 
@@ -102,6 +108,7 @@ BALANCE_TAGS = {
         "Receivables": ["AccountsReceivableNetCurrent"],
         "Inventory": ["InventoryNet"],
         "Current assets": ["AssetsCurrent"],
+        "Non-current assets": ["AssetsNoncurrent"],
         "PP&E": ["PropertyPlantAndEquipmentNet",
                  "PropertyPlantAndEquipmentAndFinanceLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization"],
         "Goodwill": ["Goodwill"],
@@ -125,6 +132,7 @@ BALANCE_TAGS = {
         "Receivables": ["TradeAndOtherCurrentReceivables", "CurrentTradeReceivables"],
         "Inventory": ["Inventories"],
         "Current assets": ["CurrentAssets"],
+        "Non-current assets": ["NoncurrentAssets"],
         "PP&E": ["PropertyPlantAndEquipment"],
         "Goodwill": ["Goodwill"],
         "Total assets": ["Assets"],
@@ -226,6 +234,12 @@ def resolve_ticker(query):
             "alternatives": [(c["ticker"], c["title"]) for c in matches[1:6]]}
 
 
+def is_sec_ticker(query):
+    """True if the text is exactly a ticker on the SEC's list (e.g. AAPL, BRK.B)."""
+    as_ticker = re.sub(r"[.\s/]+", "-", query.strip().upper())
+    return any(c["ticker"] == as_ticker for c in _company_list())
+
+
 def get_cik(ticker):
     """The SEC's company ID number (CIK) and name for a ticker or company name."""
     company = resolve_ticker(ticker)
@@ -268,7 +282,16 @@ def _choose_currency(facts):
     for unit, entries in facts.get("Assets", {}).get("units", {}).items():
         if entries:
             latest[unit] = max(e["end"] for e in entries)
-    return max(latest, key=latest.get) if latest else "USD"
+    if latest:
+        return max(latest, key=latest.get)
+    # No total assets figure (some UK balance sheets show net assets instead):
+    # use the currency most figures are in.
+    counts = {}
+    for tag in facts.values():
+        for unit, entries in tag.get("units", {}).items():
+            if re.fullmatch(r"[A-Z]{3}", unit):
+                counts[unit] = counts.get(unit, 0) + len(entries)
+    return max(counts, key=counts.get) if counts else "USD"
 
 
 def _is_quarterly(facts, standard):
@@ -374,6 +397,17 @@ def get_financials(ticker):
     """
     company = resolve_ticker(ticker)
     all_facts = get_company_facts(company["cik"])
+    # Foreign companies on the SEC trade in the US as ADRs; prices are compared
+    # with the S&P 500.
+    return financials_from_facts({"region": "US", **company}, all_facts)
+
+
+def financials_from_facts(company, all_facts):
+    """
+    Build the table of figures from XBRL facts in the SEC's layout. Used for
+    SEC filers and, after conversion, for UK and European annual reports
+    (data/esef.py).
+    """
     standard = _choose_standard(all_facts)
     facts = all_facts[standard]
     currency = _choose_currency(facts)
@@ -388,7 +422,7 @@ def get_financials(ticker):
     # revenue yet, so a reported profit or loss also counts.
     flows = flows[flows["Revenue"].notna() | flows["Net income"].notna()]
     if flows.empty:
-        raise CompanyNotSupported("No results found in the SEC data for this company.")
+        raise CompanyNotSupported("No results found in the filed figures for this company.")
 
     # Some companies (e.g. Microsoft) report selling and admin costs separately.
     flows["SG&A"] = flows["SG&A"].fillna(flows["Selling & marketing"] + flows["G&A"])
@@ -399,6 +433,11 @@ def get_financials(ticker):
         flows["Credit loss provisions"] = flows["Credit loss provisions"].fillna(
             flows["Net interest income"] - flows["Interest income after provisions"])
         flows = flows.drop(columns=["Interest income after provisions"])
+    # Some banks report interest earned and paid separately: net them.
+    if "Interest income" in flows:
+        flows["Net interest income"] = flows["Net interest income"].fillna(
+            flows["Interest income"] - flows["Interest expense"])
+        flows = flows.drop(columns=["Interest income", "Interest expense"])
     # Some banks report fee income and fee expense separately: net them.
     if "Fee income" in flows:
         flows["Fee & other income"] = flows["Fee & other income"].fillna(
@@ -422,6 +461,11 @@ def get_financials(ticker):
     flows.index = pd.to_datetime(flows.index)
     flows = flows.sort_index()
     balances.index = pd.to_datetime(balances.index)
+    # Some balance sheets (common in the UK) show "net assets" with no total
+    # assets line: add the two halves up instead.
+    balances["Total assets"] = balances["Total assets"].fillna(
+        balances["Non-current assets"] + balances["Current assets"])
+    balances = balances.drop(columns=["Non-current assets"])
     table = flows.join(balances.reindex(flows.index))
     table.index.name = "Quarter ending" if quarterly else "Year ending"
 
@@ -431,12 +475,16 @@ def get_financials(ticker):
 
     # Diluted share count from the latest results (a backup for per-share
     # values when there's no market data).
-    shares = facts.get("WeightedAverageNumberOfDilutedSharesOutstanding", {}) \
-        .get("units", {}).get("shares", [])
+    shares = next((facts[tag]["units"].get("shares", []) for tag in
+                   ("WeightedAverageNumberOfDilutedSharesOutstanding", "AdjustedWeightedAverageShares")
+                   if tag in facts), [])
     latest_shares = max(shares, key=lambda e: (e["end"], e["filed"]))["val"] if shares else None
 
-    return {**company, "table": table, "standard": standard, "currency": currency,
-            "quarterly": quarterly, "is_bank": is_bank, "diluted_shares": latest_shares}
+    return {"source": "sec", **company, "table": table, "standard": standard,
+            "currency": currency, "quarterly": quarterly, "is_bank": is_bank,
+            "diluted_shares": latest_shares,
+            # An ADR: a foreign company's shares traded in the US.
+            "adr": company.get("region") == "US" and not quarterly}
 
 
 def get_quarterly_financials(ticker):

@@ -2,7 +2,7 @@
 
 **An AI-assisted equity research tool that turns a company's official filings into an analyst-style briefing pack in about three minutes.**
 
-Type a company name or ticker. The tool downloads the company's financial data and filings from the SEC, calculates the key figures and runs an accounting red-flag scan in Python, then has Claude (Anthropic's AI model) read the actual documents and write a six-part briefing pack.
+Type a company name or ticker. The tool downloads the company's financial data and filings from official sources (the SEC for US-listed companies, and machine-readable annual reports for companies listed in London and Europe), calculates the key figures and runs an accounting red-flag scan in Python, then has Claude (Anthropic's AI model) read the actual documents and write a six-part briefing pack.
 
 **[▶ Live demo](https://earnings-co-pilot.streamlit.app/)** · **[Example report: Apple](examples/AAPL_2026-11-10.md)** · **[Example report: HSBC](examples/HSBC_2026-11-10.md)**
 
@@ -35,12 +35,16 @@ Type a company name or ticker. The tool downloads the company's financial data a
 |---|---|---|
 | **US companies** | Quarterly | Apple, Microsoft, Nvidia, Kraft Heinz, Costco |
 | **Banks** (US and foreign) | Bank-specific view | JPMorgan, Bank of America, HSBC, Barclays, MUFG |
-| **UK** | Annual (IFRS) | BP, Shell, Unilever, AstraZeneca, GSK, Diageo |
-| **Europe** | Annual (IFRS) | ASML, SAP, Novo Nordisk, Novartis, TotalEnergies, UBS |
+| **UK, US-listed** (SEC) | Annual (IFRS) | BP, Shell, Unilever, AstraZeneca, GSK, Diageo |
+| **UK, London-only** (ESEF) | Annual (IFRS) | Tesco, Rolls-Royce, Lloyds, BT, Next, Marks & Spencer |
+| **Europe, US-listed** (SEC) | Annual (IFRS) | ASML, SAP, Novo Nordisk, Novartis, TotalEnergies, UBS |
+| **Europe, home-listed** (ESEF) | Annual (IFRS) | Airbus, LVMH, BNP Paribas, Inditex |
 | **Japan** | Annual | Toyota, Sony, Honda, Mizuho |
 | **China** | Annual (US GAAP) | Alibaba, JD.com, PDD, Baidu, NIO |
 
-Figures are shown in each company's own currency. Company names work as well as tickers ("jp morgan" → JPM, "brk.b" → BRK-B).
+Figures are shown in each company's own currency. Company names work as well as tickers ("jp morgan" → JPM, "brk.b" → BRK-B, "tesco" → TSCO.L).
+
+**UK and European companies without a US listing** come from their annual reports in ESEF format, which every company on a UK or EU regulated market has had to publish since 2021: the report is a web page with every figure tagged in XBRL, the same machine-readable standard the SEC uses. The tool gets them from the free [filings.xbrl.org](https://filings.xbrl.org) database, converts them into the SEC's layout so the same calculations apply, and finds the share price on the home exchange (London prices converted from pence to pounds, compared with the FTSE 100 or STOXX Europe 600).
 
 **Banks get a different view**, because the usual measures don't apply to a business that lends out its customers' deposits. They are judged on efficiency ratio, return on equity, cost of risk (loan losses as a share of loans), loan-to-deposit ratio, deposit trend and equity cushion. The AI report adds capital ratios (CET1), net interest margin, credit quality and liquidity, read from the filings.
 
@@ -82,7 +86,8 @@ Figures are shown in each company's own currency. Company names work as well as 
 ## Limitations
 
 - **Foreign companies show annual figures only.** They file structured data with the SEC once a year. The AI still reads their latest quarterly results announcements.
-- **Companies listed only outside the US** (e.g. Tesco, Tokyo-only shares) aren't in the SEC's data. Covering them would need other sources (Companies House, EDINET).
+- **UK and European coverage depends on filings.xbrl.org.** It's good for UK and French companies, patchy elsewhere, and German companies (e.g. Siemens, Adidas) are missing; it can also lag a few months behind publication. For these companies, the AI reads the annual report only (half-year results aren't in a free database), insider trades aren't available, and peers are typed in rather than suggested.
+- **Companies listed only outside the US, UK and EU** (e.g. Nestlé in Switzerland, Tokyo-only shares) aren't covered. Japan would need EDINET.
 - **Some banks' figures are incomplete** in the SEC data (e.g. Deutsche Bank, Santander), so some bank checks show "n/a". Regulatory capital ratios come from the AI reading the filings, not from the structured data.
 - **Red flags are prompts to look closer, not verdicts.** The Beneish M-Score, for example, flags fast-growing companies like Nvidia (score −0.40) even without manipulation, because the model was built on slower-growing firms.
 - **Share price data comes from Yahoo Finance,** an unofficial source that can be delayed or briefly unavailable; the rest of the tool works without it. For foreign companies it shows the US-listed share (ADR), so ratios that mix ADR and home-market figures are left out. Analyst ratings are third-party views, and coverage of foreign companies on Yahoo is thin.
@@ -110,6 +115,7 @@ It opens at http://localhost:8501. There's also a command-line version: `python 
 app.py                 The website (Streamlit)
 config.py              Settings, read from .env
 data/sec.py            Financial figures from the SEC; name → ticker matching
+data/esef.py           UK and European annual reports (ESEF, via filings.xbrl.org)
 data/filings.py        Filing text: earnings releases, 10-K/10-Q, 6-K, 20-F
 data/market.py         Share prices, valuation, dividends and analyst ratings (Yahoo Finance)
 data/peers.py          Suggests peer companies (same industry, similar size)

@@ -8,7 +8,7 @@
 
 Type a company name or ticker, and Earnings Copilot:
 
-1. **Downloads the company's figures and filings from the SEC:** US, UK, European, Japanese and Chinese companies, in their own currency.
+1. **Downloads the company's figures and filings from official sources:** the SEC for US-listed companies (including UK, European, Japanese and Chinese ones), and machine-readable annual reports (ESEF) for companies listed in London and Europe, such as Tesco and Rolls-Royce. Figures are in each company's own currency.
 2. **Calculates the key numbers in Python:** margins, growth, free cash flow, net debt, and an **accounting red-flag scan** including the Beneish M-Score. Banks get their own view: efficiency, return on equity, loan losses and funding.
 3. **Has Claude (Anthropic's AI) read the actual documents** and write a briefing pack: results summary, change in management tone, red flags explained, likely analyst questions with draft answers, a company brief, and interview questions.
 

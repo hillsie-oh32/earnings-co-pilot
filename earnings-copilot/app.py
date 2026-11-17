@@ -20,7 +20,7 @@ from analysis.peers import (compare, summary as peer_summary, COLUMNS as PEER_CO
                             FORMATS as PEER_FORMATS)
 from analysis.dcf import (default_assumptions, run_dcf, implied_growth, sensitivity,
                           RISK_FREE, EQUITY_PREMIUM)
-from analysis.report import shareholder_returns
+from analysis.report import shareholder_returns, history_text
 from data.market import get_market_data, get_quote, market_as_text, MarketDataUnavailable
 from data.peers import suggest_peers, all_companies
 from data.insiders import get_insider_trades, insiders_as_text, summarise as summarise_insiders
@@ -111,13 +111,17 @@ ABOUT = f"""
 pack in about three minutes.**
 
 **What it does**
-1. **Downloads the figures and filings from the SEC** (the US markets regulator):
-   US, UK, European, Japanese and Chinese companies, in their own currency.
+1. **Downloads the figures and filings from official sources:** the SEC (the US markets
+   regulator) for US-listed companies, including UK, European, Japanese and Chinese ones
+   with US-listed shares; and machine-readable annual reports (ESEF) for companies listed
+   in London and across Europe, such as Tesco, Rolls-Royce and BNP Paribas. Figures are in
+   each company's own currency.
 2. **Calculates the key numbers in Python:** growth, margins, free cash flow, net debt,
    and an **accounting red-flag scan** (receivables, cash conversion, inventory,
    goodwill, leverage, cash runway and the Beneish M-Score for earnings manipulation).
    Banks get their own checks: efficiency, return on equity, loan losses and funding.
-3. **Shows the market view:** share price against the S&P 500, valuation, dividend yield
+3. **Shows the market view:** share price against the S&P 500, FTSE 100 or STOXX Europe
+   600, valuation, dividend yield
    and history, buybacks, results vs analysts' expectations, and analysts' consensus
    ratings and price targets.
 4. **Compares it with its peers:** similar companies side by side on growth, margins,
@@ -137,10 +141,12 @@ read. To write a new one, use your own Claude API key on the **AI report** tab.
 and explains, and must cite its sources. Its output was checked against the original
 filings, and the tool was stress-tested on 73 companies across six regions.
 
-**Limitations:** foreign companies show annual figures (they only file structured data
-with the SEC once a year); companies listed only outside the US (e.g. Tesco) aren't
-covered; red flags are prompts to look closer, not verdicts; share prices and analyst
-ratings come from Yahoo Finance and may be delayed. **Not investment advice.**
+**Limitations:** non-US companies show annual figures (their structured data is published
+once a year); the UK and European database is good for UK and French companies but
+patchy elsewhere (German companies are missing), and Swiss and Asian-only listings aren't
+covered; insider trades are US-only; red flags are prompts to look closer, not verdicts;
+share prices and analyst ratings come from Yahoo Finance and may be delayed.
+**Not investment advice.**
 
 Built by a second-year Accounting & Finance student with Python, pandas, Streamlit and
 the Claude API. **[View the code and full documentation on GitHub]({GITHUB})**
@@ -151,25 +157,26 @@ SYMBOLS = {"USD": "$", "GBP": "£", "EUR": "€", "JPY": "¥", "CNY": "CN¥", "C
 
 
 @st.cache_data(ttl=900, show_spinner=False)
-def load_market(ticker, foreign):
+def load_market(ticker, foreign, region):
     """Share price and market data, cached for 15 minutes. Returns (data, error)."""
     try:
-        return get_market_data(ticker, foreign), None
+        return get_market_data(ticker, foreign, region), None
     except MarketDataUnavailable as error:
         return None, str(error)
 
 
 def performance_chart(market, years, name):
-    """The share price against the S&P 500, both rebased to 100 at the start."""
-    prices = pd.DataFrame({name: market["prices"], "S&P 500": market["benchmark"]}).dropna()
+    """The share price against the market index, both rebased to 100 at the start."""
+    index = market["benchmark_name"]
+    prices = pd.DataFrame({name: market["prices"], index: market["benchmark"]}).dropna()
     prices = prices[prices.index >= prices.index[-1] - pd.DateOffset(years=years)]
     rebased = (prices / prices.iloc[0] * 100).reset_index(names="Date")
     data = rebased.melt(id_vars="Date", var_name="Series", value_name="Value")
-    base = alt.Chart(data, title=f"Share price vs the S&P 500 (start = 100)").encode(
+    base = alt.Chart(data, title=f"Share price vs the {index} (start = 100)").encode(
         x=alt.X("Date:T", title=None),
         y=alt.Y("Value:Q", title=None, scale=alt.Scale(zero=False),
                 axis=alt.Axis(grid=True, gridOpacity=0.3)),
-        color=alt.Color("Series:N", scale=alt.Scale(domain=[name, "S&P 500"],
+        color=alt.Color("Series:N", scale=alt.Scale(domain=[name, index],
                                                     range=SERIES[:2]),
                         legend=alt.Legend(orient="top", title=None)),
         tooltip=[alt.Tooltip("Date:T", format="%d %b %Y"), alt.Tooltip("Series:N"),
@@ -376,8 +383,8 @@ def footer():
 
 
 # Companies visitors can try in one click from the home page.
-EXAMPLES = [("Apple", "AAPL"), ("Kraft Heinz", "KHC"), ("Nvidia", "NVDA"),
-            ("JPMorgan", "JPM"), ("HSBC", "HSBC"), ("Toyota", "TM")]
+EXAMPLES = [("Apple", "AAPL"), ("Kraft Heinz", "KHC"), ("Tesco", "TSCO.L"),
+            ("Rolls-Royce", "RR.L"), ("JPMorgan", "JPM"), ("HSBC", "HSBC")]
 
 # --- Page ---------------------------------------------------------------------
 st.html(STYLE)
@@ -395,16 +402,17 @@ if home:
       <div class="ec-eyebrow">Equity research from the source filings</div>
       <div class="ec-title">Read a company's results like an analyst.</div>
       <p class="ec-lede">Type a company. Get its numbers, an accounting red-flag scan,
-      market valuation, peers, a DCF and insider dealing, all built from official SEC
-      filings. Then have Claude read the documents and write the briefing pack.</p>
+      market valuation, peers, a DCF and insider dealing, all built from official
+      filings: the SEC for US-listed companies, and annual reports for companies listed in
+      London and Europe. Then have Claude read the documents and write the briefing pack.</p>
     </div>""")
 
 with st.form("search", border=False):
     left, right = st.columns([4, 1], vertical_alignment="bottom")
-    query = left.text_input("Company name or ticker", placeholder="e.g. Apple, KHC, HSBC, Toyota",
+    query = left.text_input("Company name or ticker", placeholder="e.g. Apple, KHC, Tesco, TSCO.L",
                             label_visibility="collapsed" if not home else "visible",
-                            help="Names and tickers both work: Apple, AAPL, JP Morgan, HSBC, "
-                                 "Toyota, SAP, BRK.B")
+                            help="Names and tickers both work: Apple, AAPL, JP Morgan, BRK.B, "
+                                 "Tesco, Rolls-Royce, LLOY.L (London), AIR.PA (Paris)")
     if right.form_submit_button("Analyse", type="primary", width="stretch"):
         choose(query)
 
@@ -417,7 +425,7 @@ if home:
     st.write("")
     steps = [
         ("01", "The numbers", "Growth, margins, free cash flow and net debt, calculated "
-         "in Python from the company's own SEC data. No AI guesswork in the figures."),
+         "in Python from the company's own filed data. No AI guesswork in the figures."),
         ("02", "The red flags", "Checks an auditor would run: receivables, cash conversion, "
          "inventory, goodwill, leverage and the Beneish M-Score. Banks get bank checks."),
         ("03", "The briefing pack", "Claude reads the earnings releases and annual report, "
@@ -454,7 +462,7 @@ except Exception as error:
     st.stop()
 
 cur = n["currency"]
-market, market_error = load_market(n["ticker"], not n["quarterly"])
+market, market_error = load_market(n["ticker"], n["adr"], n["region"])
 
 # The company header: who it is, and the key facts before opening any tab.
 stats = []
@@ -471,7 +479,9 @@ stats.append(("Red flags", (f"{len(raised)} of {len(n['flags'])}"
                             + (f' <i style="color:{DOWN}">{reds} red</i>' if reds else ""))
               if raised else f'<span style="color:{UP}">None raised</span>'))
 meta = [n["industry"].title() if n.get("industry") else None,
-        "US filer, quarterly figures" if n["quarterly"] else "Foreign filer, annual figures",
+        ("US filer, quarterly figures" if n["quarterly"] else
+         f"Listed in {n['exchange']}, annual figures" if n["source"] == "esef" else
+         "Foreign filer (US-listed), annual figures"),
         f"Reports in {cur}"]
 st.html(f"""<div class="ec-co">
   <div><div class="ec-co-name">{escape(display_name(n['name'], n['ticker']))}</div>
@@ -482,7 +492,8 @@ st.html(f"""<div class="ec-co">
 </div>""")
 
 if n["matched_name"]:
-    st.caption(f"Matched from “{st.session_state.query}”. Not the right company?")
+    st.caption(f"Matched from “{st.session_state.query}”."
+               + (" Not the right company?" if n["alternatives"] else ""))
     if n["alternatives"]:
         for col, (ticker, title) in zip(st.columns(len(n["alternatives"])), n["alternatives"]):
             col.button(f"{title[:28]} ({ticker})", key=f"alt-{ticker}",
@@ -507,7 +518,12 @@ with insiders_tab:
                 "company's shares, they must report it to the SEC on a **Form 4**. "
                 "Open-market **buys** are the stronger signal: insiders sell for many "
                 "reasons, and many sales are scheduled in advance under 10b5-1 plans.")
-    if st.button("Load insider trades (last 12 months)", type="primary"):
+    if n["source"] == "esef":
+        st.info("Not available for this company. UK and European directors must announce "
+                "their share dealings too (\"PDMR\" notices), but these are published as "
+                "news announcements, not in a structured database like the SEC's Form 4.",
+                icon=":material/info:")
+    elif st.button("Load insider trades (last 12 months)", type="primary"):
         progress = st.progress(0.0, text="Reading Form 4 filings...")
         table, failed = get_insider_trades(
             n["cik"], n["filings"],
@@ -516,7 +532,7 @@ with insiders_tab:
         progress.empty()
         st.session_state.insiders = {"ticker": n["ticker"], "table": table, "failed": failed}
     loaded = st.session_state.get("insiders")
-    if loaded and loaded["ticker"] == n["ticker"]:
+    if loaded and loaded["ticker"] == n["ticker"] and n["source"] == "sec":
         table, s = loaded["table"], summarise_insiders(loaded["table"])
         if s is None:
             st.info("No insider transactions reported in the last 12 months. Foreign "
@@ -626,9 +642,8 @@ with numbers_tab:
                 st.markdown(flag["detail"])
                 if flag["status"] in ("RED", "AMBER") or n["is_bank"]:
                     st.caption(flag["why"])
-    st.markdown("**Filing history (last 3 years):** " +
-                ("; ".join(n["history"]) if n["history"]
-                 else "no auditor changes, restatements or late filings ✅"))
+    st.markdown("**Filing history (last 3 years):** " + history_text(n["history"])
+                + (" ✅" if n["history"] == [] else ""))
 
 # --- Tab 2: market & dividends -----------------------------------------------------
 with market_tab:
@@ -660,7 +675,7 @@ with market_tab:
         ret, mret = market["return_1y"], market["market_return_1y"]
         cols[0].metric("1-year price change",
                        f"{ret:+.1%}" if ret is not None else "n/a",
-                       delta=(f"{(ret - mret) * 100:+.1f} pts vs S&P 500"
+                       delta=(f"{(ret - mret) * 100:+.1f} pts vs {market['benchmark_name']}"
                               if ret is not None and mret is not None else None))
         cols[1].metric("Dividend yield",
                        f"{market['dividend_yield']:.2f}%" if market["dividend_yield"] else "None",
@@ -777,7 +792,7 @@ with market_tab:
                    f"{returns['payout']:.0%}" if returns["payout"] is not None else "n/a",
                    help="Dividends as a share of profit. " + returns["payout_text"].capitalize())
     st.caption(f"{'Last 12 months' if n['quarterly'] else 'Latest financial year'}, from the "
-               "cash flow statement in the company's SEC filings. Buybacks return cash by "
+               "cash flow statement in the company's filed accounts. Buybacks return cash by "
                "reducing the number of shares, which raises each remaining share's slice "
                "of profit.")
 
@@ -799,23 +814,32 @@ with peers_tab:
     st.markdown("Compare with similar companies: the same measures side by side, plus the "
                 "peer median. Ratios are used throughout, so companies reporting in "
                 "different currencies can be compared.")
-    suggested = suggest_peers(n["cik"], n["sic"], not n["quarterly"])
+    # Automatic suggestions use SEC industry codes, which UK and European
+    # companies don't have: for them, peers are typed in.
+    suggested = (suggest_peers(n["cik"], n["sic"], not n["quarterly"])
+                 if n["source"] == "sec" else [])
     options = [f"{c['ticker']} – {c['name']}" for c in all_companies()
                if c["ticker"] != n["ticker"]]
     chosen = st.multiselect(
         "Peers", options, default=[f"{t} – {name}" for t, name in suggested],
         max_selections=8, accept_new_options=True,
-        placeholder="Search for a company, or type a ticker",
-        help="Suggested automatically: companies in the same SEC industry"
-             + (f" ({n['industry']})" if n["industry"] else "")
-             + " and of similar size. Add or remove any.")
+        placeholder="Search for a company, or type a ticker (e.g. SBRY.L, SIE.DE)",
+        help=("Suggested automatically: companies in the same SEC industry"
+              + (f" ({n['industry']})" if n["industry"] else "")
+              + " and of similar size. Add or remove any." if n["source"] == "sec" else
+              "Type the Yahoo Finance ticker of UK or European peers, e.g. SBRY.L "
+              "(Sainsbury's) or MKS.L (M&S), or pick US-listed companies from the list."))
+    if n["source"] == "esef" and not chosen:
+        st.caption("Peers aren't suggested automatically for UK and European companies yet. "
+                   "Type tickers above: London tickers end in .L (e.g. SBRY.L), Frankfurt "
+                   "in .DE, Paris in .PA, Amsterdam in .AS.")
     peer_tickers = [p.split(" – ")[0].strip().upper() for p in chosen]
 
     key = (n["ticker"], tuple(peer_tickers))
     if st.button("Compare", type="primary", disabled=not peer_tickers):
         progress = st.progress(0.0, text="Loading peers...")
         table, failed = compare(
-            n, get_quote(n["ticker"], not n["quarterly"]), peer_tickers, load=load_numbers,
+            n, get_quote(n["ticker"], n["adr"]), peer_tickers, load=load_numbers,
             on_progress=lambda i, t: progress.progress(i / len(peer_tickers),
                                                        text=f"Loading {t}..."))
         progress.empty()
@@ -842,7 +866,8 @@ with peers_tab:
         st.dataframe(shown.style.apply(bold_rows, axis=1), hide_index=True, width="stretch")
         st.caption("Market value is shown for US-dollar listings. 'Red flags' counts the "
                    "amber and red checks from each company's own red-flag scan. Valuations "
-                   "and share prices from Yahoo Finance; everything else from SEC filings.")
+                   "and share prices from Yahoo Finance; everything else from the "
+                   "companies' filed accounts.")
         if result["failed"]:
             st.caption("Couldn't load: " + "; ".join(result["failed"]))
 
@@ -889,16 +914,22 @@ with dcf_tab:
                 "funding. Banks are usually valued on price-to-book against return on "
                 "equity, or on their dividends. See the bank measures in the Numbers and "
                 "Peers tabs.")
-    elif not n["quarterly"]:
-        st.info("The DCF is available for US companies. For foreign companies, the "
-                "accounts are in their home currency while the US-listed share (ADR) is "
-                "priced in dollars and may represent several home-market shares, so a "
-                "per-share value can't be compared reliably with the price.")
+    elif n["adr"]:
+        st.info("The DCF isn't available for foreign companies' US-listed shares (ADRs): "
+                "the accounts are in their home currency while the ADR is priced in dollars "
+                "and may represent several home-market shares, so a per-share value can't be "
+                "compared reliably with the price.")
+    elif market and market["currency"] != cur:
+        st.info(f"The DCF isn't available here: this company reports in {cur} but its shares "
+                f"are priced in {market['currency']}, so a per-share value from the accounts "
+                "can't be compared directly with the share price.")
     elif pd.isna(n["now"]["Revenue"]) or n["now"]["Revenue"] <= 0:
         st.info("A DCF needs a revenue history to project forward, and this company "
                 "doesn't report revenue yet.")
     else:
-        if n["sic"] and 6000 <= n["sic"] < 6500:
+        sym = SYMBOLS.get(cur, cur + " ")
+        latest = "last 12 months'" if n["quarterly"] else "latest year's"
+        if n["financial"]:
             st.warning("This is a financial company (insurer, broker or finance firm). A "
                        "DCF is less suitable here, because cash flows mix the company's own "
                        "money with customers' money. Treat the result with extra caution.",
@@ -920,12 +951,12 @@ with dcf_tab:
         growth = left.slider(
             "Revenue growth per year, years 1-5", -10.0, 40.0, step=0.25, format="%.2f%%",
             key=prefix + "growth",
-            help=f"Starts at the last 12 months' growth ({base['growth']:.1%}), limited "
+            help=f"Starts at the {latest} growth ({base['growth']:.1%}), limited "
                  "to -5% to 25%.") / 100
         margin = left.slider(
             "Free cash flow margin", -20.0, 60.0, step=0.25, format="%.2f%%",
             key=prefix + "margin",
-            help=f"Free cash flow as a share of revenue. Starts at the last 12 months' "
+            help=f"Free cash flow as a share of revenue. Starts at the {latest} "
                  f"figure ({base['margin']:.1%}).") / 100
         terminal = right.slider(
             "Long-term growth after year 5", 0.0, 4.0, step=0.25, format="%.2f%%",
@@ -953,11 +984,11 @@ with dcf_tab:
             st.subheader("Result")
             cols = st.columns(4)
             cols[0].metric("Model value per share",
-                           f"${per_share:,.2f}" if per_share is not None else "n/a",
+                           f"{sym}{per_share:,.2f}" if per_share is not None else "n/a",
                            delta=(f"{per_share / price - 1:+.1%} vs price"
                                   if per_share is not None and price else None),
                            delta_color="off",
-                           help=f"Current share price: ${price:,.2f}" if price else None)
+                           help=f"Current share price: {sym}{price:,.2f}" if price else None)
             cols[1].metric("Enterprise value", money(result["enterprise_value"], cur),
                            help="Value of the whole business: today's value of the cash "
                                 "flows in years 1-5 plus the terminal value.")
@@ -975,7 +1006,7 @@ with dcf_tab:
                                      base["net_debt"], base["shares"]) if price else None
             if implied is not None:
                 st.info(f"**What the share price implies (reverse DCF):** with your other "
-                        f"assumptions, today's price of ${price:,.2f} is consistent with "
+                        f"assumptions, today's price of {sym}{price:,.2f} is consistent with "
                         f"revenue growth of **{implied:.1%} a year** for five years. Its "
                         f"recent growth was {base['growth']:.1%}. Whether that looks "
                         "achievable is the real question a DCF helps you ask.",
@@ -1018,12 +1049,12 @@ with dcf_tab:
                 styles.iloc[2, 2] = "font-weight: bold; text-decoration: underline"
                 return styles
 
-            grid = grid.map(lambda v: f"${v:,.2f}" if pd.notna(v) else "n/a")
+            grid = grid.map(lambda v: f"{sym}{v:,.2f}" if pd.notna(v) else "n/a")
             st.dataframe(grid.style.apply(highlight_centre, axis=None), width="stretch")
 
         with st.expander("How this model works, and its simplifications"):
             st.markdown(f"""
-1. **Revenue** starts from the last 12 months ({money(base['revenue'], cur)}) and grows at
+1. **Revenue** starts from the {latest} figure ({money(base['revenue'], cur)}) and grows at
    your chosen rate for 5 years.
 2. **Free cash flow** each year = revenue × your FCF margin. Free cash flow here is
    operating cash flow minus capital spending, a simple stand-in for the "unlevered"
@@ -1038,11 +1069,22 @@ with dcf_tab:
 rate uses fixed market assumptions (risk-free rate {RISK_FREE:.2%}, equity risk premium
 {EQUITY_PREMIUM:.0%}) and Yahoo's beta, limited to 0.8-2.0. Real models forecast each line
 of the accounts and vary these over time.
-""")
+""" + ("" if n["region"] == "US" else """
+**Note:** the risk-free rate and tax rate are US figures, used here for simplicity. For a
+UK or European company, local government bond yields and tax rates would be more accurate.
+"""))
 
 # --- Tab 5: AI report ------------------------------------------------------------
 with ai_tab:
-    if n["quarterly"]:
+    if n["source"] == "esef":
+        st.markdown("Claude reads the company's latest annual report, then writes: results "
+                    "summary, management tone, red flags explained, analyst Q&A prep, company "
+                    "brief and interview questions.")
+        st.caption("Half-year results announcements aren't available in a free database, so "
+                   "the report is based on the annual report. Long reports are cut to fit "
+                   "(the report says so). Takes 2-4 minutes and uses your API credit (about "
+                   "$0.70-1.20 per report).")
+    elif n["quarterly"]:
         st.markdown("Claude reads the last two earnings releases and the latest 10-K/10-Q, "
                     "then writes: results summary, management tone, red flags explained, "
                     "analyst Q&A prep, company brief and interview questions.")

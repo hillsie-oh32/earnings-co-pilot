@@ -27,12 +27,12 @@ for warning in numbers["warnings"]:
 
 print("Fetching market data...")
 try:
-    market = get_market_data(numbers["ticker"], foreign=not numbers["quarterly"])
+    market = get_market_data(numbers["ticker"], numbers["adr"], numbers["region"])
     numbers["market_text"] = market_as_text(market)
 except MarketDataUnavailable as error:
     print(f"  (skipped: {error})")
 
-if numbers["quarterly"]:  # only US companies file insider trades (Form 4)
+if numbers["source"] == "sec" and numbers["quarterly"]:  # only US companies file Form 4s
     print("Reading insider trades...")
     trades, _ = get_insider_trades(numbers["cik"], numbers["filings"])
     numbers["insiders_text"] = insiders_as_text(trades)

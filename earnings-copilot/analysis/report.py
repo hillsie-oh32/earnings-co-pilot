@@ -8,7 +8,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from data.sec import get_financials
+from data import esef
+from data.sec import get_financials, is_sec_ticker, CompanyNotSupported
 from data.filings import (get_filing_list, get_earnings_releases, get_latest_report,
                           get_foreign_results, filing_history_flags, get_industry)
 from analysis.metrics import add_ratios, trailing_twelve_months
@@ -40,21 +41,62 @@ SNAPSHOT_COLUMNS = {
 }
 
 
+def load_financials(query):
+    """
+    Find the company and its figures. The SEC comes first (US-listed
+    companies, with quarterly figures for US ones). If the SEC has no match,
+    or the query is a European ticker like TSCO.L, look in UK and European
+    annual reports (ESEF) instead.
+    """
+    if esef.is_european_ticker(query):
+        return esef.get_financials(query)
+    if is_sec_ticker(query):
+        return get_financials(query)
+    # A company name whose best match on Yahoo is listed in the UK or Europe
+    # (e.g. "next plc", not NextEra): look there first, then at the SEC.
+    if esef.prefers_europe(query):
+        try:
+            return esef.get_financials(query)
+        except CompanyNotSupported as europe_error:
+            try:
+                return get_financials(query)
+            except CompanyNotSupported:
+                raise europe_error from None
+    try:
+        return get_financials(query)
+    except CompanyNotSupported as sec_error:
+        try:
+            return esef.get_financials(query)
+        except CompanyNotSupported as europe_error:
+            # Give the most useful reason: Europe's if a European share was
+            # found or nothing matched anywhere, otherwise the SEC's.
+            useful = (str(europe_error).startswith("Found")
+                      or str(sec_error).startswith("No US-listed company"))
+            raise (europe_error if useful else sec_error) from None
+
+
 def build_numbers(query):
     """Everything the code calculates (no AI). Returns a dictionary of results."""
-    data = get_financials(query)
-    # Commercial and savings banks (industry codes 6020-6036) get the bank view
-    # even if their figures are hard to find, rather than company checks that
-    # don't apply to them.
-    sic, industry = get_industry(data["cik"])
-    data["is_bank"] = data["is_bank"] or bool(sic and 6020 <= sic <= 6036)
+    data = load_financials(query)
+    if data["source"] == "sec":
+        # Commercial and savings banks (industry codes 6020-6036) get the bank
+        # view even if their figures are hard to find, rather than company
+        # checks that don't apply to them.
+        sic, industry = get_industry(data["cik"])
+        data["is_bank"] = data["is_bank"] or bool(sic and 6020 <= sic <= 6036)
+        data["financial"] = bool(sic and 6000 <= sic < 6500)
+        filings = get_filing_list(data["cik"])
+        history = filing_history_flags(filings)
+    else:
+        # No SEC industry code: use Yahoo's industry instead.
+        sic, industry, sector = None, *esef.get_industry(data["ticker"])
+        data["is_bank"] = data["is_bank"] or bool(industry and industry.startswith("Banks"))
+        data["financial"] = sector == "Financial Services"
+        filings, history = data["filings"], None  # no SEC filing history to check
     data["sic"], data["industry"] = sic, industry
     per_year = 4 if data["quarterly"] else 1
     q = add_ratios(data["table"], per_year)
     now, ago = trailing_twelve_months(q, per_year)
-
-    filings = get_filing_list(data["cik"])
-    history = filing_history_flags(filings)
 
     columns = SNAPSHOT_COLUMNS[data["is_bank"]]
     snapshot = q[list(columns)].tail(8 if data["quarterly"] else 5).rename(columns=columns)
@@ -74,7 +116,12 @@ def _notes_and_warnings(n):
     """Things the reader should know: neutral notes, and cautions."""
     notes, warnings = [], []
     q = n["quarters"]
-    if not n["quarterly"]:
+    if n["source"] == "esef":
+        notes.append(f"Annual figures from the company's annual reports, which UK and EU listed "
+                     f"companies publish in a machine-readable format (ESEF). Half-year "
+                     f"results aren't published that way, so the latest figures are from the "
+                     f"last annual report. Figures are in {n['currency']}, under IFRS.")
+    elif not n["quarterly"]:
         notes.append(f"Annual figures: foreign companies only file structured figures with "
                      f"the SEC once a year, with their annual report. Figures are in "
                      f"{n['currency']}, under "
@@ -86,19 +133,32 @@ def _notes_and_warnings(n):
                      "different measures, such as efficiency, return on equity, loan losses "
                      "and funding, rather than margins and cash flow.")
     else:
-        sic, industry = get_industry(n["cik"])
-        if sic and 6000 <= sic < 6500:
+        if n["financial"]:
+            industry = n["industry"] or "financial services"
             warnings.append(f"This is a financial company ({industry}). The red-flag checks are "
                             "designed for non-financial businesses: insurers and finance "
                             "companies hold customer money, so measures like debt, cash flow "
                             "and receivables mean something different. Treat the flags with "
                             "caution.")
     age = (pd.Timestamp(date.today()) - q.index[-1]).days
-    if age > (150 if n["quarterly"] else 460):
+    if n["source"] == "esef" and age > 460:
+        warnings.append(f"The latest annual report in the filings.xbrl.org database is for the "
+                        f"year to {q.index[-1]:%d %b %Y}, {age} days ago. A newer report may "
+                        "have been published but not yet added, so check the company's "
+                        "website for its latest results.")
+    elif age > (150 if n["quarterly"] else 460):
         warnings.append(f"The latest {n['period']} in the SEC's data ends "
                         f"{q.index[-1]:%d %b %Y}, {age} days ago. More recent results may be "
                         "missing from the SEC's data, so check the company's latest filings.")
     return notes, warnings
+
+
+def history_text(history):
+    """The SEC filing-history check in words (None: not an SEC filer)."""
+    if history is None:
+        return ("not checked (the company doesn't file with the SEC; check its annual report "
+                "for auditor changes or restatements)")
+    return "; ".join(history) if history else "no auditor changes, restatements or late filings"
 
 
 def numbers_as_text(n):
@@ -119,9 +179,7 @@ def numbers_as_text(n):
                  f"{returns['buybacks_text']}; dividend payout ratio: {returns['payout_text']}")
 
     flag_lines = [f"[{f['status']}] {f['check']}: {f['detail']}" for f in n["flags"]]
-    flag_lines.append("Filing history (last 3 years): " +
-                      ("; ".join(n["history"]) if n["history"] else
-                       "no auditor changes, restatements or late filings"))
+    flag_lines.append("Filing history (last 3 years): " + history_text(n["history"]))
 
     return "\n\n".join([
         f"Currency: {n['currency']}. Money figures in millions. "
@@ -171,7 +229,11 @@ def get_documents(n):
     the latest 10-Q/10-K. Foreign companies: the last two results
     announcements (6-K) and the annual report (20-F), cut to fit the budget.
     """
-    if n["quarterly"]:
+    if n["source"] == "esef":
+        # Results announcements aren't in a free structured database, so
+        # the AI reads the annual report.
+        documents = [esef.get_annual_report_text(n["lei"], max_chars=MAX_DOCUMENT_CHARS)]
+    elif n["quarterly"]:
         documents = (get_earnings_releases(n["cik"], n["filings"])
                      + [get_latest_report(n["cik"], n["filings"])])
     else:
@@ -239,9 +301,7 @@ def numbers_markdown(n, include_market=True):
     for f in sorted(n["flags"], key=lambda f: order[f["status"]]):
         out.append(f"| {STATUS_LABELS[f['status']]} | {f['check']} | "
                    f"{f['detail'].replace('|', '/').replace('->', '→')} |")
-    out += ["", "**Filing history (last 3 years):** "
-            + ("; ".join(n["history"]) if n["history"]
-               else "no auditor changes, restatements or late filings.")]
+    out += ["", "**Filing history (last 3 years):** " + history_text(n["history"]) + "."]
 
     if include_market and n.get("market_text"):
         out += ["", f"### Market data (Yahoo Finance, {date.today():%d %b %Y})", ""]

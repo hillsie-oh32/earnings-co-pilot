@@ -18,7 +18,10 @@ import time
 import pandas as pd
 import yfinance as yf
 
-BENCHMARK = "SPY"  # an S&P 500 tracker fund, used as "the market"
+# What "the market" is for each region: the share price is compared with it.
+BENCHMARKS = {"US": ("SPY", "S&P 500"),            # an S&P 500 tracker fund
+              "UK": ("^FTSE", "FTSE 100"),
+              "EU": ("^STOXX", "STOXX Europe 600")}
 
 
 class MarketDataUnavailable(RuntimeError):
@@ -42,18 +45,42 @@ def _price_history(ticker, period="10y"):
     if history.empty:
         raise MarketDataUnavailable(f"No share price history found for {ticker}.")
     history.index = history.index.tz_localize(None).normalize()
-    return history
+    # Yahoo sometimes adds an empty row for today (e.g. European markets
+    # before the close); a missing last price would spoil every calculation.
+    return history[history["Close"].notna()]
 
 
-_benchmark = {"fetched": 0.0, "prices": None}
+_benchmarks = {}  # symbol -> (time fetched, prices)
 
 
-def _benchmark_prices():
-    """S&P 500 prices, downloaded at most once an hour and shared by all companies."""
-    if _benchmark["prices"] is None or time.time() - _benchmark["fetched"] > 3600:
-        _benchmark["prices"] = _price_history(BENCHMARK, "5y")["Close"]
-        _benchmark["fetched"] = time.time()
-    return _benchmark["prices"]
+def _benchmark_prices(region="US"):
+    """The market index's prices, downloaded at most once an hour and shared by
+    all companies."""
+    symbol = BENCHMARKS[region][0]
+    fetched, prices = _benchmarks.get(symbol, (0.0, None))
+    if prices is None or time.time() - fetched > 3600:
+        prices = _price_history(symbol, "5y")["Close"]
+        _benchmarks[symbol] = (time.time(), prices)
+    return prices
+
+
+def _pence_scale(info):
+    """London prices on Yahoo are in pence ("GBp"): divide by 100 for pounds."""
+    return 0.01 if info.get("currency") in ("GBp", "GBX") else 1.0
+
+
+def _fix_pence_ratios(info):
+    """For some London shares Yahoo divides a price in pounds by earnings in
+    pence, giving a P/E 100 times too small (e.g. 0.4 instead of 37). A real
+    P/E below 1.5 is essentially impossible, so correct those."""
+    if _pence_scale(info) == 1:
+        return info
+    fixed = dict(info)
+    for key in ("trailingPE", "forwardPE"):
+        value = info.get(key)
+        if isinstance(value, (int, float)) and 0 < value < 1.5:
+            fixed[key] = value * 100
+    return fixed
 
 
 def _optional(fetch):
@@ -70,7 +97,7 @@ def get_quote(ticker, foreign=False):
     just the valuation figures. Returns None if Yahoo can't be reached.
     """
     try:
-        info = _retry(lambda: yf.Ticker(ticker).info) or {}
+        info = _fix_pence_ratios(_retry(lambda: yf.Ticker(ticker).info) or {})
     except Exception:
         return None
 
@@ -79,7 +106,8 @@ def get_quote(ticker, foreign=False):
         return value if isinstance(value, (int, float)) and value > 0 else None
 
     change = info.get("52WeekChange")
-    return {"market_cap": positive("marketCap"), "currency": info.get("currency", "USD"),
+    currency = "GBP" if _pence_scale(info) != 1 else info.get("currency", "USD")
+    return {"market_cap": positive("marketCap"), "currency": currency,
             "pe": positive("trailingPE"),
             # Yahoo's forecasts for ADRs often mix per-ADR and home-market
             # figures (e.g. a forward P/E of 59 against a current P/E of 14).
@@ -89,23 +117,36 @@ def get_quote(ticker, foreign=False):
             "return_1y": change if isinstance(change, (int, float)) else None}
 
 
-def get_market_data(ticker, foreign=False):
+def get_market_data(ticker, foreign=False, region="US"):
     """
     Share price, valuation and dividend information for a ticker.
     `foreign` is True for ADRs, to leave out ratios that are unreliable for them.
+    `region` (US, UK or EU) picks the market index to compare with.
     """
     try:
         stock = yf.Ticker(ticker)
-        info = _retry(lambda: stock.info) or {}
+        info = _fix_pence_ratios(_retry(lambda: stock.info) or {})
         history = _price_history(ticker)
-        benchmark = _benchmark_prices()
+        benchmark = _benchmark_prices(region)
     except MarketDataUnavailable:
         raise
     except Exception as error:
         raise MarketDataUnavailable(
             "Market data is unavailable right now (Yahoo Finance may be limiting requests). "
             f"Details: {error}") from None
+    # Show London prices in pounds, like the accounts, rather than pence.
+    scale = _pence_scale(info)
+    if scale != 1:
+        history = history.copy()
+        history[["Close", "Dividends"]] = history[["Close", "Dividends"]] * scale
+        info = {**info, "currency": "GBP",
+                **{k: info[k] * scale for k in ("currentPrice", "previousClose",
+                                                 "fiftyTwoWeekHigh", "fiftyTwoWeekLow",
+                                                 "targetMeanPrice", "targetLowPrice",
+                                                 "targetHighPrice")
+                   if isinstance(info.get(k), (int, float))}}
     ratings = _optional(lambda: stock.recommendations)
+    # Earnings-vs-estimate history is only reliable for US companies.
     earnings_dates = _optional(lambda: stock.get_earnings_dates(limit=16))
     # The price history includes each dividend paid, so no separate request.
     dividends = history["Dividends"][history["Dividends"] > 0] \
@@ -153,6 +194,7 @@ def get_market_data(ticker, foreign=False):
         "market_return_1y": total_return(benchmark, 365),
         "prices": close,
         "benchmark": benchmark,
+        "benchmark_name": BENCHMARKS[region][1],
         "dividends_by_year": by_year,
         "last_dividend": last_dividend,
         # Yahoo's dividend history is sometimes incomplete (e.g. some ADRs).
@@ -160,8 +202,11 @@ def get_market_data(ticker, foreign=False):
             _pays_dividend(info) and last_dividend is not None
             and (pd.Timestamp.now() - last_dividend).days > 450),
         "analysts": _analyst_view(info, ratings, price),
-        **_earnings_scorecard(earnings_dates, close, foreign),
+        # Yahoo's earnings estimates for European shares are patchy and often
+        # on a different basis (half-years), so the scorecard is US-only.
+        **_earnings_scorecard(earnings_dates, close, foreign or region != "US"),
         "foreign": foreign,
+        "region": region,
     }
 
 
@@ -281,7 +326,7 @@ def market_as_text(m):
         "Dividend yield: " + (f"{m['dividend_yield']:.2f}%" if m["dividend_yield"]
                               else "none (no dividend)"),
         f"Share price change, last 12 months: {pct(m['return_1y'])} "
-        f"(S&P 500: {pct(m['market_return_1y'])})",
+        f"({m['benchmark_name']}: {pct(m['market_return_1y'])})",
         f"52-week range: {num(m['low_52w'], '{:,.2f}')} to {num(m['high_52w'], '{:,.2f}')}",
     ]
     if m["price_to_book"] is not None:

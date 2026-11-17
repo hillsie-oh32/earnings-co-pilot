@@ -92,8 +92,7 @@ def compare(n, quote, peer_tickers, load=build_numbers, on_progress=None):
             on_progress(i, ticker)
         try:
             peer = load(ticker)
-            rows.append(company_row(peer, get_quote(peer["ticker"], not peer["quarterly"]),
-                                    is_bank))
+            rows.append(company_row(peer, get_quote(peer["ticker"], peer["adr"]), is_bank))
         except Exception as error:
             failed.append(f"{ticker} ({error})")
 
