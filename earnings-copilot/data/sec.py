@@ -62,6 +62,8 @@ FLOW_TAGS = {
         "Revenue": ["Revenue", "RevenueFromContractsWithCustomers",
                     "RevenueAndOperatingIncome",  # banks: total operating income
                     "RevenueFromSaleOfGoods"],  # e.g. Novartis, Sanofi
+        # Insurers under IFRS 17 (e.g. Aviva): used only if there's no revenue line.
+        "Insurance revenue": ["InsuranceRevenue"],
         "Cost of revenue": ["CostOfSales"],
         "Gross profit": ["GrossProfit"],
         "SG&A": ["SellingGeneralAndAdministrativeExpense"],
@@ -418,6 +420,9 @@ def financials_from_facts(company, all_facts):
         metric: _combine_tags(facts, tags, to_flow, currency)
         for metric, tags in FLOW_TAGS[standard].items()
     })
+    if "Insurance revenue" in flows:
+        flows["Revenue"] = flows["Revenue"].fillna(flows["Insurance revenue"])
+        flows = flows.drop(columns=["Insurance revenue"])
     # Only keep periods with results. Early-stage companies may have no
     # revenue yet, so a reported profit or loss also counts.
     flows = flows[flows["Revenue"].notna() | flows["Net income"].notna()]

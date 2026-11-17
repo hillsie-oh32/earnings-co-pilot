@@ -34,7 +34,8 @@ _session = requests.Session()
 # UK versions: only P and S count as open-market buys and sales).
 KINDS = [
     ("M", "Option exercise", r"exercis|exercice"),
-    ("A", "Award / vesting", r"free share|gratuite|attribution|grant|vest|performance"),
+    ("A", "Award / vesting", r"free share|gratuite|attribution|grant|vest|performance|livraison|"
+                             r"delivery"),
     ("J", "Dividend reinvestment", r"dividend|r[ée]investissement"),
     ("J", "Subscription", r"subscri|souscri"),
     ("G", "Gift / transfer", r"gift|donation|don\b|transfer|apport|succession|inherit"),
@@ -180,6 +181,10 @@ def _parse(text, published):
                                       r"obligation|bond|droit|right", instrument, re.I))
         if instrument and not is_share:
             code, label = "J", "Other instrument"
+        # Free or performance shares, or anything received at a price of
+        # zero, are awards, even when the form calls them an "acquisition".
+        if code == "P" and (price == 0 or re.search(r"gratuit|performance|free", instrument, re.I)):
+            code, label = "A", "Award / vesting"
         trades.append({
             "Date": _date(_field(block, L["date"]), published),
             "Insider": _tidy(insider.strip()), "Role": role.strip(), "Type": label, "Code": code,

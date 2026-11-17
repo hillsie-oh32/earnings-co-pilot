@@ -51,7 +51,8 @@ KINDS = [
      r"investment shares"),
     ("A", "Award / vesting",
      r"\bvest|award|grant|release of|deferred|ltip|long[- ]term incentive|performance share|"
-     r"restricted share|bonus|conditional|nil[- ]cost|allot"),
+     r"restricted share|bonus|conditional|nil[- ]cost|allot|dividend equivalent|"
+     r"under the .{0,40}(share|incentive|award|bonus|equity) plan"),
     ("G", "Gift / transfer", r"\bgift|transfer|spouse|into (an )?isa|bed and"),
     ("S", "Sell", r"\b(sale|sell|sold|dispos)"),
     ("P", "Buy", r"\b(purchas|buy|bought|acqui)"),
@@ -160,7 +161,9 @@ def _date(text, fallback):
     if iso:
         when = pd.to_datetime(iso.group(), errors="coerce")
     else:
-        written = re.search(r"\d{1,2}(st|nd|rd|th)?\s+[A-Za-z]+\s+\d{4}|\d{1,2}/\d{1,2}/\d{4}", text)
+        # '23 October 2026', '23/10/2026' or 'October 30, 2026'.
+        written = re.search(r"\d{1,2}(st|nd|rd|th)?\s+[A-Za-z]+\s+\d{4}|\d{1,2}/\d{1,2}/\d{4}|"
+                            r"[A-Za-z]+\s+\d{1,2},?\s+\d{4}", text)
         when = (pd.to_datetime(written.group().replace("st ", " ").replace("nd ", " ")
                                .replace("rd ", " ").replace("th ", " "),
                                errors="coerce", dayfirst=True) if written else pd.NaT)
@@ -208,11 +211,22 @@ def _aggregate(text, currency, reference_price):
 
 
 # The labels of the regulation's template, and the field each one fills.
-LABELS = [("name", r"^name$"), ("position", r"^position"),
+LABELS = [("name", r"^(name|name of natural person|full name)$"),
+          ("first name", r"^first name"), ("last name", r"^(last name|surname)"),
+          ("position", r"^position"),
           ("nature", r"^nature of (the )?trans"), ("currency", r"^currency"),
           ("prices", r"^prices?( ?\(s\))? and volumes?"), ("aggregated", r"^aggregated?\b"),
+          ("price", r"^prices?( ?\(s\))?$"), ("volume", r"^volumes?( ?\(s\))?$"),
+          ("total", r"^totals?( ?\(s\))?$"),
           ("date", r"^date of (the )?trans"), ("place", r"^place of (the )?trans"),
-          ("other", r"^(description|initial notif|lei|legal entity|identification code)")]
+          ("instrument", r"^description of (the )?financial instrument"),
+          ("other", r"^(initial notif|lei|legal entity|identification code|full name of the entity)")]
+
+
+def _join_letters(text):
+    """Mend words split after their first letter by the document's formatting
+    ('T ransfer' -> 'Transfer', 'N athan Coe' -> 'Nathan Coe')."""
+    return re.sub(r"\b([A-Z]) (?=[a-z]{2,})", r"\1", text)
 
 
 def _parse(html, published, reference_price=None):
@@ -228,6 +242,22 @@ def _parse(html, published, reference_price=None):
             return
         code, label = _classify(deal["nature"])
         currency = deal.get("currency", "")
+        # Bonds, options etc. aren't shares (e.g. a director buying the
+        # company's new bonds).
+        instrument = deal.get("instrument", "")
+        if ((instrument and not re.search(r"share|ordinary|stock|\bads\b|\badr|depositary|"
+                                          r"equity", instrument, re.I))
+                or re.search(r"\bnotes?\b|\bbonds?\b|debenture|warrant", deal["nature"], re.I)):
+            code, label = "J", "Other instrument"
+        # Dealings in another currency (e.g. US-listed ADRs in dollars, or
+        # shares bought in Amsterdam in euros) are listed but left out of the
+        # totals, which are in the company's own currency.
+        text = f"{currency} {deal.get('prices', '')} {deal.get('aggregated', '')} {instrument}"
+        foreign = next((c for c, pattern in (("USD", r"\$|\bUSD\b|\bADS\b|\bADRs?\b|depositary"),
+                                             ("EUR", r"€|\bEUR\b"))
+                        if re.search(pattern, text, re.I)), None)
+        if foreign and not re.search(r"£|\bGBP\b|\bGBX\b|pence", text):
+            label += f" ({foreign}, not in totals)"
         pairs = _prices_and_volumes(deal.get("prices", ""), currency)
         agg_volume, agg_price = _aggregate(deal.get("aggregated", ""), currency, reference_price)
         if pairs and sum(v for _, v in pairs):
@@ -247,8 +277,15 @@ def _parse(html, published, reference_price=None):
             price /= 100
         # If the price still isn't plausible, the notice was laid out in a
         # way we couldn't read reliably: leave it blank rather than guess.
-        if price and reference_price and not reference_price / 5 <= price <= reference_price * 5:
+        not_in_totals = "not in totals" in label
+        if (price and reference_price and not not_in_totals
+                and not reference_price / 5 <= price <= reference_price * 5):
             price = None
+        # Shares received for nothing are awards, whatever the notice calls them.
+        if code == "P" and price == 0:
+            code, label = "A", "Award / vesting"
+        if not_in_totals:
+            code = "J"  # listed, but not counted as an open-market buy or sale
         trades.append({
             "Date": _date(deal.get("date"), published),
             "Insider": person, "Role": role, "Type": label, "Code": code,
@@ -260,7 +297,7 @@ def _parse(html, published, reference_price=None):
             "Held": held,
             # The notice's own wording, kept for checking (not displayed).
             "_source": f"{deal['nature']} || {deal.get('prices', '')} || "
-                       f"{deal.get('aggregated', '')}",
+                       f"{deal.get('aggregated', '')} || {instrument}",
         })
 
     # Walk through the table rows. A row with a template label starts a field;
@@ -272,23 +309,55 @@ def _parse(html, published, reference_price=None):
         return _clean(" ".join(s for s in td.find_all(string=True)
                                if s.find_parent("table") is table))
 
-    section, field = None, None
+    section, field, columns = None, None, None
     for tr in soup.find_all("tr"):
         table = tr.find_parent("table")
-        cells = [c for c in (own_text(td) for td in tr.find_all(["td", "th"])
-                             if td.find_parent("table") is table) if c]
+        raw = [own_text(td) for td in tr.find_all(["td", "th"]) if td.find_parent("table") is table]
+        cells = [_join_letters(c) for c in raw if c]
         if not cells:
             continue
-        if re.fullmatch(r"\d\.?", cells[0]):
-            section, field = cells[0][0], None
+
+        # A section heading: '1', '4.1', '1.', or '1 - Details of ...' in one cell.
+        heading = re.match(r"^(\d+(?:\.\d+)?)\.?\s*[-–]?\s*(.*)$", cells[0])
+        if heading and (len(cells[0]) <= 4 or re.search(r"details|reason", cells[0], re.I)):
+            text = (heading.group(2) + " " + " ".join(cells[1:])).lower()
+            section = ("issuer" if "issuer" in text else "trans" if "transaction" in text
+                       else "reason" if "reason" in text else "person")
+            if section == "trans" and deal.get("nature"):
+                finish()
+                deal = {}
+            field = None
             continue
+
+        # A table with headings in one row and values in the next (e.g. HSBC):
+        # remember which column holds the date and the currency.
+        lower = [c.lower() for c in raw]
+        if sum(bool(re.search(r"^(date of trans|currency|financial instrument|place of)", c))
+               for c in lower) >= 2:
+            columns = lower
+            continue
+        if columns and len(raw) == len(columns):
+            for heading_text, value in zip(columns, raw):
+                if heading_text.startswith("date of trans") and value:
+                    deal["date"] = value
+                elif heading_text.startswith("currency") and value:
+                    deal["currency"] = value
+                elif heading_text.startswith("financial instrument") and value:
+                    deal["instrument"] = value
+            columns = None
+            continue
+        columns = None
+
         if re.fullmatch(r"[a-g]\)", cells[0]):
             cells = cells[1:]
         matched = None
         for i, cell in enumerate(cells[:2]):
+            label_text = cell.lower().lstrip("- ").rstrip(": ")
             for name, pattern in LABELS:
-                if re.search(pattern, cell.lower().lstrip("- ")):
-                    matched, rest = name, " ".join(cells[i + 1:])
+                if re.search(pattern, label_text):
+                    # 'Nature of Transaction: Disposal' keeps its value in the same cell.
+                    inline = cell.split(":", 1)[1].strip() if ":" in cell else ""
+                    matched, rest = name, " ".join([inline] * bool(inline) + cells[i + 1:])
                     break
             if matched:
                 break
@@ -296,19 +365,40 @@ def _parse(html, published, reference_price=None):
             if field in ("prices", "aggregated"):
                 deal[field] = deal.get(field, "") + " " + " ".join(cells)
             continue
+
+        if matched in ("price", "volume", "total"):
+            # Separate Price / Volume / Total rows add to the current figures.
+            if field in ("prices", "aggregated"):
+                deal[field] = deal.get(field, "") + f" {matched} " + rest
+            else:
+                field, deal["prices"] = "prices", f" {matched} " + rest
+            continue
         field = matched
-        if matched == "name" and section == "1":
+        if matched in ("name", "first name") and section in ("person", None):
             finish()
             deal = {}
             person, role, held = _tidy(rest), "", ""
+        elif matched == "last name" and section in ("person", None):
+            person = _tidy(f"{person or ''} {rest}".strip())
         elif matched == "position":
             role = _tidy(rest)
             if re.search(r"\bpca\b|closely associated|spouse|partner of|connected", rest.lower()):
                 held = "Person closely associated"
-        elif matched == "nature" and section == "4":
-            finish()
-            deal = {"nature": rest}
-        elif section == "4" and matched in ("currency", "prices", "aggregated", "date"):
+        elif matched == "instrument":
+            if deal.get("nature"):
+                finish()
+                deal = {}
+            deal["instrument"] = rest
+        elif matched == "nature":
+            if deal.get("nature"):
+                finish()
+                deal = {k: v for k, v in deal.items() if k in ("date", "currency", "instrument")}
+            deal["nature"] = rest
+            # HSBC-style: the price headings follow in the same row.
+            if re.search(r"\bprice", rest, re.I):
+                deal["nature"] = re.split(r"\bprice", rest, flags=re.I)[0].strip()
+                field, deal["prices"] = "prices", ""
+        elif matched in ("currency", "prices", "aggregated", "date"):
             deal[matched] = rest
     finish()
     return trades

@@ -7,6 +7,7 @@ It opens in your browser at http://localhost:8501
 
 import hmac
 import os
+import re
 from html import escape
 
 import altair as alt
@@ -349,9 +350,10 @@ ACRONYMS = {"PLC", "AG", "SA", "NV", "SE", "ASA", "LLC", "LP", "ADR", "HSBC", "B
 def display_name(name, ticker):
     """'TOYOTA MOTOR CORP/' -> 'Toyota Motor Corp'. SEC names are often in capitals
     with a state code on the end (e.g. 'APPLE INC /CA/')."""
-    name = name.strip().rstrip("/").strip()
-    if "/" in name and len(name.rsplit("/", 1)[1]) <= 3:
-        name = name.rsplit("/", 1)[0].strip()
+    # Remove a trailing state code ('APPLE INC /CA/', 'TOYOTA MOTOR CORP/') but
+    # keep legal forms that contain a slash ('Novo Nordisk A/S').
+    name = re.sub(r"\s*/\s*$", "", name.strip())   # 'TOYOTA MOTOR CORP/' -> '... CORP'
+    name = re.sub(r"\s+/\w{1,3}$", "", name)        # 'APPLE INC /CA' -> 'APPLE INC'
     if not name.isupper():
         return name
     words = []
@@ -628,8 +630,11 @@ with insiders_tab:
                            "the regulation's standard notification table in each notice; a "
                            "price that couldn't be read reliably is left blank. Source: "
                            "company announcements in the FCA's National Storage Mechanism."
-                           + (f" {loaded['failed']} notices couldn't be read."
-                              if loaded["failed"] else ""))
+                           + (f" {loaded['failed']} notices had no standard notification "
+                              "table (usually summaries of routine share-plan dealings) and were "
+                              "skipped." if loaded["failed"] else "")
+                           + " Dealings in other currencies (e.g. US-listed ADRs) are listed "
+                             "but not included in the totals.")
             else:
                 st.caption("Awards, option exercises and tax withholdings are routine pay "
                            "matters and aren't counted as buys or sales. Where connected "
