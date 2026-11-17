@@ -4,7 +4,7 @@
 
 Type a company name or ticker. The tool downloads the company's financial data and filings from official sources (the SEC for US-listed companies, and machine-readable annual reports for companies listed in London and Europe), calculates the key figures and runs an accounting red-flag scan in Python, then has Claude (Anthropic's AI model) read the actual documents and write a six-part briefing pack.
 
-**[▶ Live demo](https://earnings-co-pilot.streamlit.app/)** · **[Example report: Apple](examples/AAPL_2026-11-10.md)** · **[Example report: HSBC](examples/HSBC_2026-11-10.md)**
+**[▶ Live demo: earnings-copilot.co.uk](https://earnings-copilot.co.uk)** · **[Example report: Apple](examples/AAPL_2026-11-10.md)** · **[Example report: HSBC](examples/HSBC_2026-11-10.md)**
 
 ---
 

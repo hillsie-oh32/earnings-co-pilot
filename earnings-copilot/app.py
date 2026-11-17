@@ -383,7 +383,8 @@ def footer():
       Figures from SEC filings (EDGAR). Share prices, valuations and analyst ratings from
       Yahoo Finance, which may be delayed. A research and learning tool, not investment advice.<br>
       Built by a second-year Accounting &amp; Finance student with Python, Streamlit and the
-      Claude API &middot; <a href="{GITHUB}" target="_blank">Source code and documentation</a>
+      Claude API &middot; earnings-copilot.co.uk &middot;
+      <a href="{GITHUB}" target="_blank">Source code and documentation</a>
     </div>""")
 
 
