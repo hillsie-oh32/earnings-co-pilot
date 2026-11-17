@@ -156,33 +156,35 @@ def summarise(table):
     buys = table[table["Code"] == "P"]
     sells = table[table["Code"] == "S"]
     planned = sells[sells["Planned (10b5-1)"] == True]  # noqa: E712 (column holds None too)
+    # UK and European notices don't record pre-planned sales consistently.
+    known = sells["Planned (10b5-1)"].notna().any() if len(sells) else False
     return {
         "buy_value": buys["Value"].sum(), "sell_value": sells["Value"].sum(),
         "buyers": buys["Insider"].nunique(), "sellers": sells["Insider"].nunique(),
         "buy_count": len(buys), "sell_count": len(sells),
         "planned_share": (planned["Value"].sum() / sells["Value"].sum()
-                          if sells["Value"].sum() else None),
+                          if known and sells["Value"].sum() else None),
         "biggest_buy": buys.loc[buys["Value"].idxmax()] if buys["Value"].notna().any() else None,
         "biggest_sell": (sells.loc[sells["Value"].idxmax()]
                          if sells["Value"].notna().any() else None),
     }
 
 
-def insiders_as_text(table, months=12):
+def insiders_as_text(table, months=12, symbol="$", source="SEC Form 4"):
     """A short summary for the AI report."""
     s = summarise(table)
     if s is None:
-        return f"Insider trading (Form 4, last {months} months): no transactions reported."
+        return f"Insider trading ({source}, last {months} months): no transactions reported."
     def people(count):
         return f"{count} insider" + ("" if count == 1 else "s")
 
-    lines = [f"Insider trading (SEC Form 4, last {months} months): open-market buys "
-             f"${s['buy_value'] / 1e6:,.1f}m by {people(s['buyers'])}; sales "
-             f"${s['sell_value'] / 1e6:,.1f}m by {people(s['sellers'])}"
+    lines = [f"Insider trading ({source}, last {months} months): open-market buys "
+             f"{symbol}{s['buy_value'] / 1e6:,.1f}m by {people(s['buyers'])}; sales "
+             f"{symbol}{s['sell_value'] / 1e6:,.1f}m by {people(s['sellers'])}"
              + (f" ({s['planned_share']:.0%} of sales value under pre-arranged 10b5-1 plans)"
                 if s["planned_share"] is not None else "") + "."]
     for label, row in (("Largest buy", s["biggest_buy"]), ("Largest sale", s["biggest_sell"])):
         if row is not None:
             lines.append(f"{label}: {row['Insider']} ({row['Role']}), "
-                         f"${row['Value'] / 1e6:,.1f}m on {row['Date']:%d %b %Y}.")
+                         f"{symbol}{row['Value'] / 1e6:,.1f}m on {row['Date']:%d %b %Y}.")
     return "\n".join(lines)

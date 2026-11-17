@@ -24,6 +24,8 @@ from analysis.report import shareholder_returns, history_text
 from data.market import get_market_data, get_quote, market_as_text, MarketDataUnavailable
 from data.peers import suggest_peers, all_companies
 from data.insiders import get_insider_trades, insiders_as_text, summarise as summarise_insiders
+from data.uk_insiders import get_insider_trades as get_uk_insider_trades
+from data.fr_insiders import get_insider_trades as get_fr_insider_trades
 from data.sec import CompanyNotSupported
 
 st.set_page_config(page_title="Earnings Copilot", page_icon=":material/query_stats:",
@@ -144,7 +146,8 @@ filings, and the tool was stress-tested on 73 companies across six regions.
 **Limitations:** non-US companies show annual figures (their structured data is published
 once a year); the UK and European database is good for UK and French companies but
 patchy elsewhere (German companies are missing), and Swiss and Asian-only listings aren't
-covered; insider trades are US-only; red flags are prompts to look closer, not verdicts;
+covered; insider dealings cover US, UK-listed and Paris-listed companies only; red flags
+are prompts to look closer, not verdicts;
 share prices and analyst ratings come from Yahoo Finance and may be delayed.
 **Not investment advice.**
 
@@ -512,58 +515,132 @@ numbers_tab, market_tab, peers_tab, dcf_tab, insiders_tab, ai_tab, saved_tab = s
      ":material/person_search: Insiders", ":material/article: AI report",
      ":material/folder_open: Saved reports"])
 
-# --- Insiders: directors' and executives' own share trades (SEC Form 4) ---------------
+# --- Insiders: directors' and executives' own share trades --------------------------
+# US companies: SEC Form 4. UK-listed companies: "PDMR" notices from the FCA's
+# National Storage Mechanism. Other European companies: not available yet.
 with insiders_tab:
-    st.markdown("When directors, senior executives and 10% owners buy or sell the "
-                "company's shares, they must report it to the SEC on a **Form 4**. "
-                "Open-market **buys** are the stronger signal: insiders sell for many "
-                "reasons, and many sales are scheduled in advance under 10b5-1 plans.")
-    if n["source"] == "esef":
-        st.info("Not available for this company. UK and European directors must announce "
-                "their share dealings too (\"PDMR\" notices), but these are published as "
-                "news announcements, not in a structured database like the SEC's Form 4.",
+    uk = n["source"] == "esef" and n["region"] == "UK"
+    fr = n["source"] == "esef" and n["ticker"].endswith(".PA")
+    if fr:
+        st.markdown("French directors and senior managers, and people closely associated "
+                    "with them, must declare their dealings in the company's shares to the "
+                    "**AMF**, France's markets regulator, which publishes each declaration. "
+                    "Open-market **buys** are the stronger signal: insiders sell for many "
+                    "reasons.")
+    elif uk:
+        st.markdown("When directors and other senior managers (\"PDMRs\"), or people closely "
+                    "associated with them, deal in the company's shares, UK rules require "
+                    "them to report it within three business days. The company publishes "
+                    "each one as a **Director/PDMR Shareholding** announcement. Open-market "
+                    "**buys** are the stronger signal: insiders sell for many reasons.")
+    else:
+        st.markdown("When directors, senior executives and 10% owners buy or sell the "
+                    "company's shares, they must report it to the SEC on a **Form 4**. "
+                    "Open-market **buys** are the stronger signal: insiders sell for many "
+                    "reasons, and many sales are scheduled in advance under 10b5-1 plans.")
+    europe = uk or fr
+    available = n["source"] == "sec" or europe
+    if not available:
+        st.info("Not available for this company yet. European directors must announce their "
+                "share dealings too, but each country's regulator publishes them separately "
+                "and in its own format. US, UK-listed and Paris-listed companies are covered.",
                 icon=":material/info:")
-    elif st.button("Load insider trades (last 12 months)", type="primary"):
-        progress = st.progress(0.0, text="Reading Form 4 filings...")
-        table, failed = get_insider_trades(
-            n["cik"], n["filings"],
-            on_progress=lambda i, total: progress.progress(i / max(total, 1),
-                                                           text=f"Filing {i + 1} of {total}"))
+    elif st.button("Load director dealings (last 12 months)" if europe
+                   else "Load insider trades (last 12 months)", type="primary"):
+        progress = st.progress(0.0, text="Reading the declarations..." if europe
+                               else "Reading Form 4 filings...")
+
+        def on_progress(i, total):
+            progress.progress(i / max(total, 1), text=f"{'Notice' if europe else 'Filing'} "
+                                                      f"{i + 1} of {total}")
+
+        if uk:
+            table, failed = get_uk_insider_trades(
+                n["lei"], on_progress=on_progress,
+                reference_price=market["price"] if market else None)
+        elif fr:
+            table, failed = get_fr_insider_trades(n["name"], on_progress=on_progress)
+        else:
+            table, failed = get_insider_trades(n["cik"], n["filings"], on_progress=on_progress)
         progress.empty()
         st.session_state.insiders = {"ticker": n["ticker"], "table": table, "failed": failed}
     loaded = st.session_state.get("insiders")
-    if loaded and loaded["ticker"] == n["ticker"] and n["source"] == "sec":
+    if available and loaded and loaded["ticker"] == n["ticker"]:
         table, s = loaded["table"], summarise_insiders(loaded["table"])
+        isym = "€" if fr else "£" if uk else "$"
         if s is None:
-            st.info("No insider transactions reported in the last 12 months. Foreign "
+            st.info("No director dealings found in the AMF's database for the last 12 months. "
+                    "Companies registered outside France (e.g. Airbus, which is Dutch) "
+                    "declare to their home regulator instead." if fr else
+                    "No director dealings reported in the last 12 months." if uk else
+                    "No insider transactions reported in the last 12 months. Foreign "
                     "companies listed in the US don't have to file Form 4s.")
         else:
             cols = st.columns(3)
-            cols[0].metric("Open-market buys", f"${s['buy_value'] / 1e6:,.1f}m",
-                           help=f"{s['buy_count']} purchases by {s['buyers']} insiders.")
-            cols[1].metric("Open-market sales", f"${s['sell_value'] / 1e6:,.1f}m",
-                           help=f"{s['sell_count']} sales by {s['sellers']} insiders.")
-            cols[2].metric("Sales under 10b5-1 plans",
-                           f"{s['planned_share']:.0%}" if s["planned_share"] is not None
-                           else "n/a", help="Share of sales value scheduled in advance, "
-                                            "which says less about the insider's view.")
-            shown = table.drop(columns=["Code"]).copy()
+            cols[0].metric("Open-market buys", f"{isym}{s['buy_value'] / 1e6:,.2f}m",
+                           help=f"{s['buy_count']} purchases by {s['buyers']} "
+                                f"{'person' if s['buyers'] == 1 else 'people'}.")
+            cols[1].metric("Open-market sales", f"{isym}{s['sell_value'] / 1e6:,.2f}m",
+                           help=f"{s['sell_count']} sales by {s['sellers']} "
+                                f"{'person' if s['sellers'] == 1 else 'people'}.")
+            if europe:
+                cols[2].metric("Dealings reported", f"{len(table)}",
+                               help="Including routine ones: share plan purchases, awards, "
+                                    "dividend reinvestment, option exercises and sales to "
+                                    "cover tax.")
+            else:
+                cols[2].metric("Sales under 10b5-1 plans",
+                               f"{s['planned_share']:.0%}" if s["planned_share"] is not None
+                               else "n/a", help="Share of sales value scheduled in advance, "
+                                                "which says less about the insider's view.")
+            # Leave out columns with nothing in them (e.g. UK notices don't give
+            # holdings after the trade) and the notices' raw wording.
+            shown = table.drop(columns=[c for c in table.columns
+                                        if c == "Code" or c.startswith("_")]).copy()
+            shown = shown[[c for c in shown.columns if shown[c].notna().any()
+                           and (shown[c].astype(str) != "").any()]]
             shown["Date"] = shown["Date"].dt.strftime("%d %b %Y")
             # Format as text ourselves so blanks stay blank (not "None").
-            for column, fmt in {"Shares": "{:,.0f}", "Price": "${:,.2f}", "Value": "${:,.0f}",
+            for column, fmt in {"Shares": "{:,.0f}", "Price": isym + "{:,.2f}",
+                                "Value": isym + "{:,.0f}",
                                 "Shares owned after": "{:,.0f}"}.items():
-                shown[column] = [fmt.format(v) if pd.notna(v) else "" for v in shown[column]]
-            shown["Planned (10b5-1)"] = [{True: "Yes", False: "No"}.get(v, "")
-                                         for v in shown["Planned (10b5-1)"]]
+                if column in shown:
+                    shown[column] = [fmt.format(v) if pd.notna(v) else "" for v in shown[column]]
+            if "Planned (10b5-1)" in shown:
+                shown["Planned (10b5-1)"] = [{True: "Yes", False: "No"}.get(v, "")
+                                             for v in shown["Planned (10b5-1)"]]
+            # Real buys and sales first: the routine items can run to hundreds of rows.
+            if europe and st.toggle("Show only open-market buys and sales", value=True):
+                shown = shown[table["Code"].isin(["P", "S"]).values]
             st.dataframe(shown, hide_index=True, width="stretch")
-            st.caption("Awards, option exercises and tax withholdings are routine pay "
-                       "matters and aren't counted as buys or sales. Where connected "
-                       "holders (e.g. a fund and its owner) report the same trade, it's "
-                       "counted once. Source: SEC Form 4."
-                       + (f" {loaded['failed']} filings couldn't be read."
-                          if loaded["failed"] else ""))
+            if fr:
+                st.caption("Free and performance shares, option exercises, pledges, gifts and "
+                           "dealings in other instruments (e.g. employee savings funds) aren't "
+                           "counted as buys or sales. Figures are read from each declaration. "
+                           f"Source: AMF, BDIF database, retrieved {pd.Timestamp.now():%d %b %Y}. "
+                           "©Autorité des marchés financiers – droits réservés."
+                           + (f" {loaded['failed']} declarations couldn't be read."
+                              if loaded["failed"] else ""))
+            elif uk:
+                st.caption("Share plan purchases (e.g. SIP), awards and vesting, option "
+                           "exercises, dividend reinvestment and sales to cover tax are "
+                           "routine and aren't counted as buys or sales. Figures are read from "
+                           "the regulation's standard notification table in each notice; a "
+                           "price that couldn't be read reliably is left blank. Source: "
+                           "company announcements in the FCA's National Storage Mechanism."
+                           + (f" {loaded['failed']} notices couldn't be read."
+                              if loaded["failed"] else ""))
+            else:
+                st.caption("Awards, option exercises and tax withholdings are routine pay "
+                           "matters and aren't counted as buys or sales. Where connected "
+                           "holders (e.g. a fund and its owner) report the same trade, it's "
+                           "counted once. Source: SEC Form 4."
+                           + (f" {loaded['failed']} filings couldn't be read."
+                              if loaded["failed"] else ""))
         # The AI report includes the insider summary once it has been loaded.
-        n_ai = {**n_ai, "insiders_text": insiders_as_text(table)}
+        n_ai = {**n_ai, "insiders_text": insiders_as_text(
+            table, symbol=isym, source="AMF directors' declarations" if fr else
+            "UK PDMR notices" if uk else "SEC Form 4")}
 
 # --- Tab 1: the numbers ----------------------------------------------------------
 with numbers_tab:

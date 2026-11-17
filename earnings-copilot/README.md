@@ -18,7 +18,10 @@ Type a company name or ticker. The tool downloads the company's financial data a
 - **Market & dividends:** share price performance against the S&P 500, valuation (P/E, forward P/E, price-to-book, EV/EBITDA), dividend yield and history, dividends and buybacks from the cash flow statement, a dividend-cover check, and **analysts' consensus** (Strong Buy to Strong Sell, with price targets) as reported by Yahoo Finance
 - **Peer comparison ("comps"):** peers suggested automatically (same SEC industry code, similar size; editable), compared on growth, margins, leverage, valuation and red flags (or bank measures for banks), with the peer median and a plain-English summary of where the company stands
 - **DCF valuation:** an interactive discounted cash flow model (growth, free cash flow margin, long-term growth and discount rate as sliders, starting from the company's own figures and a CAPM-based WACC), with a **reverse DCF** showing the growth the share price implies and a sensitivity table. US non-financial companies; clearly labelled as illustrative
-- **Insider trading:** directors' and executives' own buys and sales of the company's shares from SEC Form 4 filings, separating open-market trades from routine pay items and flagging sales pre-arranged under 10b5-1 plans
+- **Insider trading:** directors' and executives' own buys and sales of the company's shares, separating open-market trades from routine pay items (awards, option exercises, share plans, sales to cover tax):
+  - **US:** SEC Form 4 filings, flagging sales pre-arranged under 10b5-1 plans
+  - **UK:** "Director/PDMR Shareholding" notices from the FCA's National Storage Mechanism, read from the standard notification table that UK market abuse rules require (each company fills it in slightly differently, so the reader was tested against 11 companies' notices and checked against the originals)
+  - **France:** directors' declarations published by the AMF (in French and English)
 - **Results vs expectations:** for the last 8 quarters, reported earnings per share against analysts' estimates (beat or miss), the share price reaction on results day, and the next results date
 
 **AI briefing pack (about 3 minutes, $0.60–1.20 of API credit).** On the live site, visitors can run it with their own Claude API key. The key is used for that one report only and never stored, and their reports stay private to them.
@@ -86,7 +89,8 @@ Figures are shown in each company's own currency. Company names work as well as 
 ## Limitations
 
 - **Foreign companies show annual figures only.** They file structured data with the SEC once a year. The AI still reads their latest quarterly results announcements.
-- **UK and European coverage depends on filings.xbrl.org.** It's good for UK and French companies, patchy elsewhere, and German companies (e.g. Siemens, Adidas) are missing; it can also lag a few months behind publication. For these companies, the AI reads the annual report only (half-year results aren't in a free database), insider trades aren't available, and peers are typed in rather than suggested.
+- **UK and European coverage depends on filings.xbrl.org.** It's good for UK and French companies, patchy elsewhere, and German companies (e.g. Siemens, Adidas) are missing; it can also lag a few months behind publication. For these companies, the AI reads the annual report only (half-year results aren't in a free database), and peers are typed in rather than suggested.
+- **Insider dealings outside the US** cover UK-listed companies (FCA) and Paris-listed companies (AMF) only; other European regulators each publish in their own format. Companies registered outside France but listed in Paris (e.g. Airbus, which is Dutch) declare to their home regulator. UK and French notices don't record pre-planned sales the way US 10b5-1 filings do.
 - **Companies listed only outside the US, UK and EU** (e.g. Nestlé in Switzerland, Tokyo-only shares) aren't covered. Japan would need EDINET.
 - **Some banks' figures are incomplete** in the SEC data (e.g. Deutsche Bank, Santander), so some bank checks show "n/a". Regulatory capital ratios come from the AI reading the filings, not from the structured data.
 - **Red flags are prompts to look closer, not verdicts.** The Beneish M-Score, for example, flags fast-growing companies like Nvidia (score −0.40) even without manipulation, because the model was built on slower-growing firms.
@@ -120,6 +124,8 @@ data/filings.py        Filing text: earnings releases, 10-K/10-Q, 6-K, 20-F
 data/market.py         Share prices, valuation, dividends and analyst ratings (Yahoo Finance)
 data/peers.py          Suggests peer companies (same industry, similar size)
 data/insiders.py       Insider trades from SEC Form 4 filings
+data/uk_insiders.py    UK directors' dealings (PDMR notices, FCA National Storage Mechanism)
+data/fr_insiders.py    French directors' declarations (AMF)
 data/industries.json   SEC industry codes of the ~1,500 largest companies
 analysis/peers.py      The peer comparison table and summary
 analysis/dcf.py        The DCF model, reverse DCF and sensitivity table
