@@ -630,9 +630,12 @@ with insiders_tab:
                            "the regulation's standard notification table in each notice; a "
                            "price that couldn't be read reliably is left blank. Source: "
                            "company announcements in the FCA's National Storage Mechanism."
-                           + (f" {loaded['failed']} notices had no standard notification "
-                              "table (usually summaries of routine share-plan dealings) and were "
-                              "skipped." if loaded["failed"] else "")
+                           + (f" {loaded['failed']} "
+                              + ("notice has" if loaded["failed"] == 1 else "notices had")
+                              + " no standard notification table (usually summaries of routine "
+                              "share-plan dealings) and "
+                              + ("was" if loaded["failed"] == 1 else "were") + " skipped."
+                              if loaded["failed"] else "")
                            + " Dealings in other currencies (e.g. US-listed ADRs) are listed "
                              "but not included in the totals.")
             else:
