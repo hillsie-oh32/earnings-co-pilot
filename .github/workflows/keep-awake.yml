@@ -1,0 +1,32 @@
+# Visits the live app every 6 hours so Streamlit's free hosting doesn't leave
+# it asleep. See .github/scripts/keep_awake.py. You can also run it by hand:
+# GitHub -> Actions -> "Keep app awake" -> Run workflow.
+name: Keep app awake
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"   # every 6 hours, at 17 minutes past (UTC)
+  workflow_dispatch:
+
+jobs:
+  visit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install a headless browser
+        run: |
+          pip install playwright==1.65.2
+          python -m playwright install --with-deps chromium
+      - name: Visit the app (and wake it if it's asleep)
+        run: python .github/scripts/keep_awake.py
+      - name: Save a screenshot if it failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: keep-awake-failure
+          path: keep-awake-failure.png
+          if-no-files-found: ignore

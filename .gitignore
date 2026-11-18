@@ -9,3 +9,7 @@ __pycache__/
 # Hide Claude file
 .claude
 **/.claude
+
+# Personal files (CV with contact details) and LinkedIn screenshots: keep off GitHub.
+cv/
+screenshots/
